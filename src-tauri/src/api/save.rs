@@ -176,18 +176,35 @@ pub async fn create_save(
         .map_err(|e| format!("保存记忆库失败: {}", e))?;
 
     // 7. 持久化剧本状态（若有）
-    if let Some(ref script_status) = service.game_status.lock().await.script_status {
-        let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
-        let _ = SaveRepo::upsert_running_script(
-            db,
-            save_id,
-            &script_status.folder_key,
-            &vars_json,
-            &script_status.current_chapter_key,
-            script_status.current_event_process,
-        )
-        .await
-        .map_err(|e| eprintln!("[SAVE_WARN] create_save: 保存剧本状态失败: {}", e));
+    {
+        let gs = service.game_status.lock().await;
+        if let Some(ref script_status) = gs.script_status {
+            let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
+            // 玩家阅读位置（前端上报）：与引擎位置（event_sequence）并存，读档优先据此恢复。
+            // 剧本未开始时为空（init_script 已清），写 None 表示无上报记录，读档回退引擎位置。
+            let player_read_chapter = if gs.player_read_chapter.is_empty() {
+                None
+            } else {
+                Some(gs.player_read_chapter.clone())
+            };
+            let player_read_sequence = if gs.player_read_seq > 0 {
+                Some(gs.player_read_seq)
+            } else {
+                None
+            };
+            let _ = SaveRepo::upsert_running_script(
+                db,
+                save_id,
+                &script_status.folder_key,
+                &vars_json,
+                &script_status.current_chapter_key,
+                script_status.current_event_process,
+                player_read_chapter,
+                player_read_sequence,
+            )
+            .await
+            .map_err(|e| eprintln!("[SAVE_WARN] create_save: 保存剧本状态失败: {}", e));
+        }
     }
 
     Ok(CreateSaveResponse {
@@ -364,18 +381,43 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
                 .find(|s| s.folder_key == rs.script_folder)
                 .cloned();
             if let Some(mut script) = script {
-                script.current_chapter_key = rs.current_chapter.clone();
-                script.current_event_process = rs.event_sequence;
+                // 优先按「玩家阅读位置」恢复（前端上报，避免从引擎预跑位置续跑导致"跳剧情"）。
+                // 仅当玩家位置所在章节在当前剧本目录中真实存在时采用，否则回退引擎位置
+                // （剧本内容在存档后被修改、或旧档无上报记录的场景）。
+                let chapters_dir = script.script_path.join("Chapters");
+                let chapter_exists = |chapter: &str| -> bool {
+                    let p = if chapter.ends_with(".yaml") {
+                        chapters_dir.join(chapter)
+                    } else {
+                        chapters_dir.join(format!("{}.yaml", chapter))
+                    };
+                    p.exists()
+                };
+                let (restore_chapter, restore_seq) = match rs.player_read_chapter.as_deref() {
+                    Some(ch) if !ch.is_empty() && chapter_exists(ch) => (
+                        rs.player_read_chapter.clone().unwrap_or_default(),
+                        rs.player_read_sequence.unwrap_or(rs.event_sequence),
+                    ),
+                    _ => (rs.current_chapter.clone(), rs.event_sequence),
+                };
+
+                script.current_chapter_key = restore_chapter;
+                script.current_event_process = restore_seq;
                 script.vars = serde_json::from_str(&rs.variable_info).unwrap_or_default();
                 let mut gs = service.game_status.lock().await;
                 gs.script_status = Some(script);
+                // 重置玩家阅读位置暂存：前端续跑后会随 `script:progress` 重新上报
+                gs.player_read_chapter.clear();
+                gs.player_read_seq = 0;
                 // 递增剧本纪元：此后旧剧本任务的收尾（on_script_end）不会清理这份新恢复的状态
                 gs.script_epoch = gs.script_epoch.wrapping_add(1);
                 tracing::info!(
-                    "[LoadSave] 已恢复剧本状态: {} 章节={} 事件={}",
+                    "[LoadSave] 已恢复剧本状态: {} 章节={} 事件={}（玩家位置: 章节={:?} 事件={:?}）",
                     rs.script_folder,
                     rs.current_chapter,
-                    rs.event_sequence
+                    rs.event_sequence,
+                    rs.player_read_chapter,
+                    rs.player_read_sequence
                 );
             } else {
                 tracing::warn!(
@@ -444,18 +486,34 @@ pub async fn update_save(
         .map_err(|e| format!("保存记忆库失败: {}", e))?;
 
     // 6. 持久化剧本状态
-    if let Some(ref script_status) = service.game_status.lock().await.script_status {
-        let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
-        let _ = SaveRepo::upsert_running_script(
-            db,
-            save_id,
-            &script_status.folder_key,
-            &vars_json,
-            &script_status.current_chapter_key,
-            script_status.current_event_process,
-        )
-        .await
-        .map_err(|e| eprintln!("[SAVE_WARN] update_save: 保存剧本状态失败: {}", e));
+    {
+        let gs = service.game_status.lock().await;
+        if let Some(ref script_status) = gs.script_status {
+            let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
+            // 玩家阅读位置（前端上报）：与引擎位置并存，读档优先据此恢复
+            let player_read_chapter = if gs.player_read_chapter.is_empty() {
+                None
+            } else {
+                Some(gs.player_read_chapter.clone())
+            };
+            let player_read_sequence = if gs.player_read_seq > 0 {
+                Some(gs.player_read_seq)
+            } else {
+                None
+            };
+            let _ = SaveRepo::upsert_running_script(
+                db,
+                save_id,
+                &script_status.folder_key,
+                &vars_json,
+                &script_status.current_chapter_key,
+                script_status.current_event_process,
+                player_read_chapter,
+                player_read_sequence,
+            )
+            .await
+            .map_err(|e| eprintln!("[SAVE_WARN] update_save: 保存剧本状态失败: {}", e));
+        }
     }
 
     Ok(())

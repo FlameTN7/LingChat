@@ -150,28 +150,44 @@ impl AutoSaveManager {
             .map_err(|e| format!("保存记忆库失败: {}", e))?;
 
         // 4e. Persist script state (if running)
-        if let Some(ref script_status) = service.game_status.lock().await.script_status {
-            let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
-            let _ = SaveRepo::upsert_running_script(
-                &self.db,
-                save_id,
-                &script_status.folder_key,
-                &vars_json,
-                &script_status.current_chapter_key,
-                script_status.current_event_process,
-            )
-            .await
-            .map_err(|e| {
-                tracing::warn!("[AutoSave] 保存剧本状态失败: {}", e);
-            });
-        } else {
-            // 无剧本进行中：清理该槽位残留的剧本状态。
-            // 否则新会话启动时（line_list 仅剩启动残留）会把对话覆盖成空，
-            // 而旧的事件序号残留在 running_script 里 → 产生"空对话 + 深位置"的损坏存档。
-            if let Ok(Some(save_model)) = SaveRepo::get_save_by_id(&self.db, save_id).await {
-                if let Some(rs_id) = save_model.running_script_id {
-                    let _ = SaveRepo::delete_running_script(&self.db, rs_id).await;
-                    let _ = SaveRepo::update_save_running_script(&self.db, save_id, None).await;
+        {
+            let gs = service.game_status.lock().await;
+            if let Some(ref script_status) = gs.script_status {
+                let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
+                // 玩家阅读位置（前端上报）：与引擎位置并存，读档优先据此恢复
+                let player_read_chapter = if gs.player_read_chapter.is_empty() {
+                    None
+                } else {
+                    Some(gs.player_read_chapter.clone())
+                };
+                let player_read_sequence = if gs.player_read_seq > 0 {
+                    Some(gs.player_read_seq)
+                } else {
+                    None
+                };
+                let _ = SaveRepo::upsert_running_script(
+                    &self.db,
+                    save_id,
+                    &script_status.folder_key,
+                    &vars_json,
+                    &script_status.current_chapter_key,
+                    script_status.current_event_process,
+                    player_read_chapter,
+                    player_read_sequence,
+                )
+                .await
+                .map_err(|e| {
+                    tracing::warn!("[AutoSave] 保存剧本状态失败: {}", e);
+                });
+            } else {
+                // 无剧本进行中：清理该槽位残留的剧本状态。
+                // 否则新会话启动时（line_list 仅剩启动残留）会把对话覆盖成空，
+                // 而旧的事件序号残留在 running_script 里 → 产生"空对话 + 深位置"的损坏存档。
+                if let Ok(Some(save_model)) = SaveRepo::get_save_by_id(&self.db, save_id).await {
+                    if let Some(rs_id) = save_model.running_script_id {
+                        let _ = SaveRepo::delete_running_script(&self.db, rs_id).await;
+                        let _ = SaveRepo::update_save_running_script(&self.db, save_id, None).await;
+                    }
                 }
             }
         }

@@ -304,6 +304,10 @@ impl ScriptManager {
             }
             // 记录本次运行的纪元号（on_script_end 据此判断是否清理剧本状态）
             gs.script_epoch = ctx.run_epoch;
+            // 清空玩家阅读位置暂存：本次运行的阅读位置由前端随 script:progress 重新上报，
+            // 避免残留上一轮剧本/读档前的位置，导致存档写入错误章节。
+            gs.player_read_chapter.clear();
+            gs.player_read_seq = 0;
         }
 
         // Load player info from script settings

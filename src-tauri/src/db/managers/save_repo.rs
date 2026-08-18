@@ -488,6 +488,8 @@ impl SaveRepo {
         variable_info: &str,
         current_chapter: &str,
         event_sequence: i32,
+        player_read_chapter: Option<String>,
+        player_read_sequence: Option<i32>,
     ) -> Result<i32> {
         // Check if save already has a running_script
         let save_model = Self::get_save_by_id(db, save_id)
@@ -506,6 +508,8 @@ impl SaveRepo {
                 active.variable_info = Set(variable_info.to_string());
                 active.current_chapter = Set(current_chapter.to_string());
                 active.event_sequence = Set(event_sequence);
+                active.player_read_chapter = Set(player_read_chapter);
+                active.player_read_sequence = Set(player_read_sequence);
                 active.update(db).await.map_err(|e| anyhow!("{e}"))?;
                 return Ok(existing_id);
             }
@@ -517,6 +521,8 @@ impl SaveRepo {
             variable_info: Set(variable_info.to_string()),
             current_chapter: Set(current_chapter.to_string()),
             event_sequence: Set(event_sequence),
+            player_read_chapter: Set(player_read_chapter),
+            player_read_sequence: Set(player_read_sequence),
             save_id: Set(save_id),
             ..Default::default()
         };
