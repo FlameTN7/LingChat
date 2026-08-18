@@ -214,6 +214,11 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
         ));
     }
 
+    // 为句柄登记块另留一份 ai_service 引用：`ai_service` 即将被 async move 闭包
+    // 整体移入；`state` 借用 `app`，若活到 `app` 移入之后会触发 E0505。
+    // 故登记块只能用这份克隆，不再触碰 `state`/`ai_service`。
+    let ai_service_register = state.ai_service.clone();
+
     let handle = tokio::spawn(async move {
         let mut ctx = ScriptContext {
             db: &db,
@@ -249,10 +254,8 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
     });
 
     // 登记当前运行句柄：读档等场景需要「掐断旧任务」时据此 abort 并等待收尾。
-    // 注意不能复用上面的 `ai_service`：它已被 async move 闭包整体移入，
-    // 这里用 `state` 重新取引用（AppHandle 仍可访问）。
     {
-        let service = state.ai_service.lock().await;
+        let service = ai_service_register.lock().await;
         *service.script_manager.current_run.lock().await = Some(handle);
     }
 
