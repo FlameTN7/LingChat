@@ -202,7 +202,19 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
     let llm = crate::ai_service::llm::slot_snapshot(&state.chat.llm).await;
     let achievement_manager = state.achievement_manager.clone();
 
-    tokio::spawn(async move {
+    // 单剧本同时运行保护（原子 CAS）：与 start_script 共用同一守卫，避免双任务竞争。
+    // 忙时返回明确错误而非静默忽略。
+    if is_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(format!(
+            "已有剧本正在运行，忽略重复启动请求: '{}'",
+            adventure_folder
+        ));
+    }
+
+    let handle = tokio::spawn(async move {
         let mut ctx = ScriptContext {
             db: &db,
             data_dir: &data_dir,
@@ -212,6 +224,7 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
             llm: llm.as_ref(),
             channels,
             is_preview: false,
+            run_epoch: crate::ai_service::game_system::script_engine::script_manager::next_script_epoch(),
         };
 
         match ScriptManager::execute_script(&script, &mut ctx, &is_running).await {
@@ -234,6 +247,12 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
             Err(e) => tracing::error!("[AdventureAPI] 冒险执行错误: {}", e),
         }
     });
+
+    // 登记当前运行句柄：读档等场景需要「掐断旧任务」时据此 abort 并等待收尾。
+    {
+        let service = ai_service.lock().await;
+        *service.script_manager.current_run.lock().await = Some(handle);
+    }
 
     Ok(())
 }

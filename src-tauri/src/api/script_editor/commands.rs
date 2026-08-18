@@ -1466,6 +1466,7 @@ pub async fn editor_start_preview(
             channels,
             // 试玩产出标记：ai:reply 会带 preview_gen，前端据此丢弃迟到的流式回复
             is_preview: true,
+            run_epoch: crate::ai_service::game_system::script_engine::script_manager::next_script_epoch(),
         };
         use crate::ai_service::game_system::script_engine::ScriptManager;
 

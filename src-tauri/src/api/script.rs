@@ -7,6 +7,7 @@ use crate::ai_service::game_system::script_engine::events::ScriptContext;
 use crate::ai_service::game_system::script_engine::ScriptManager;
 use crate::AppState;
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager};
 
 // ============================================================
@@ -98,8 +99,19 @@ pub async fn start_script(app: AppHandle, script_name: String) -> Result<(), Str
         (script, game_status, config, is_running)
     };
 
+    // 单剧本同时运行保护（原子 CAS）：引擎同一时刻只支持一个剧本任务。
+    // 双任务会互相顶掉输入/选项通道，导致「用户输入通道已关闭」与事件进度错乱。
+    // 读档续跑已在 load_save 中掐断旧任务；此守卫兜底其他路径的重复启动。
+    // 忙时返回明确错误而非静默忽略，前端据此可靠重试。
+    if is_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(format!("已有剧本正在运行，忽略重复启动请求: '{}'", script_name));
+    }
+
     // Run script in background task (does NOT hold AIService lock across awaits)
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut ctx = ScriptContext {
             db: &db,
             data_dir: &data_dir,
@@ -109,6 +121,7 @@ pub async fn start_script(app: AppHandle, script_name: String) -> Result<(), Str
             llm: llm.as_ref(),
             channels,
             is_preview: false,
+            run_epoch: crate::ai_service::game_system::script_engine::script_manager::next_script_epoch(),
         };
 
         match ScriptManager::execute_script(&script, &mut ctx, &is_running).await {
@@ -131,6 +144,12 @@ pub async fn start_script(app: AppHandle, script_name: String) -> Result<(), Str
             Err(e) => tracing::error!("[ScriptAPI] 剧本执行错误: {}", e),
         }
     });
+
+    // 登记当前运行句柄：读档等场景需要「掐断旧任务」时据此 abort 并等待收尾。
+    {
+        let service = ai_service.lock().await;
+        *service.script_manager.current_run.lock().await = Some(handle);
+    }
 
     Ok(())
 }
