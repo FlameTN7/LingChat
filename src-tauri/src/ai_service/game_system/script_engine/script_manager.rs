@@ -7,11 +7,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::ai_service::game_system::script_engine::chapter::Chapter;
 use crate::ai_service::game_system::script_engine::events::ScriptContext;
@@ -45,6 +46,17 @@ pub struct ScriptManager {
     pub all_scripts: HashMap<String, ScriptStatus>,
     /// Whether a script is currently running (shared so callers can read without lock).
     pub is_running: Arc<AtomicBool>,
+    /// 当前运行中的剧本任务句柄（start_script/start_adventure/试玩 spawn 时登记）。
+    /// 读档等场景需要「掐断旧任务」时据此 abort 并等待收尾，避免双任务竞争。
+    pub current_run: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+/// 剧本运行纪元计数器：每次启动剧本/读档续跑递增，用于区分新旧剧本任务。
+static NEXT_SCRIPT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// 分配一个新的剧本运行纪元号。
+pub fn next_script_epoch() -> u64 {
+    NEXT_SCRIPT_EPOCH.fetch_add(1, Ordering::SeqCst)
 }
 
 impl ScriptManager {
@@ -57,6 +69,7 @@ impl ScriptManager {
         let mut manager = Self {
             all_scripts: HashMap::new(),
             is_running: Arc::new(AtomicBool::new(false)),
+            current_run: Mutex::new(None),
         };
         manager.init_all_scripts(data_dir);
         manager
@@ -261,7 +274,37 @@ impl ScriptManager {
     /// Initialize a script: register its roles, set script_status, load player info.
     pub async fn init_script(script: &ScriptStatus, ctx: &mut ScriptContext<'_>) -> Result<()> {
         // Set script_status on GameStatus
-        ctx.game_status.lock().await.script_status = Some(script.clone());
+        {
+            let mut gs = ctx.game_status.lock().await;
+            // 若 load_save 已恢复同一剧本的进度（current_chapter_key 非空），
+            // 保留其章节/事件/变量，使 run_script 能从存档章节续跑；仅合并剧本元数据。
+            let has_resume = gs
+                .script_status
+                .as_ref()
+                .map(|s| s.folder_key == script.folder_key && !s.current_chapter_key.is_empty())
+                .unwrap_or(false);
+            if has_resume {
+                if let Some(ref mut ss) = gs.script_status {
+                    ss.name = script.name.clone();
+                    ss.description = script.description.clone();
+                    ss.intro_chapter = script.intro_chapter.clone();
+                    ss.settings = script.settings.clone();
+                    ss.script_path = script.script_path.clone();
+                    ss.recommand_start = script.recommand_start.clone();
+                    ss.adventure = script.adventure.clone();
+                    tracing::info!(
+                        "[ScriptManager] 续跑恢复: 剧本 '{}' 从章节 '{}' 事件 {} 继续",
+                        script.name,
+                        ss.current_chapter_key,
+                        ss.current_event_process
+                    );
+                }
+            } else {
+                gs.script_status = Some(script.clone());
+            }
+            // 记录本次运行的纪元号（on_script_end 据此判断是否清理剧本状态）
+            gs.script_epoch = ctx.run_epoch;
+        }
 
         // Load player info from script settings
         if let Some(user_name) = script.settings.get("user_name").and_then(|v| v.as_str()) {
@@ -405,18 +448,31 @@ impl ScriptManager {
                     settings.system_prompt_example_old.as_deref(),
                     prompt_options,
                 );
-                let sys_line = LineBase {
-                    content: ai_prompt,
-                    attribute: LineAttributeExt(LineAttribute::System),
-                    sender_role_id: Some(role_id),
-                    display_name: Some(settings.ai_name.clone()),
-                    ..Default::default()
-                };
-                ctx.game_status
+                // 若该角色已有 system 人设台词（如读档恢复时已补建），跳过避免重复注入
+                let already_has_system = ctx
+                    .game_status
                     .lock()
                     .await
-                    .add_line(ctx.db, sys_line)
-                    .await?;
+                    .line_list
+                    .iter()
+                    .any(|l| {
+                        matches!(l.attribute(), LineAttribute::System)
+                            && l.base.sender_role_id == Some(role_id)
+                    });
+                if !already_has_system {
+                    let sys_line = LineBase {
+                        content: ai_prompt,
+                        attribute: LineAttributeExt(LineAttribute::System),
+                        sender_role_id: Some(role_id),
+                        display_name: Some(settings.ai_name.clone()),
+                        ..Default::default()
+                    };
+                    ctx.game_status
+                        .lock()
+                        .await
+                        .add_line(ctx.db, sys_line)
+                        .await?;
+                }
             }
         }
 
@@ -434,7 +490,13 @@ impl ScriptManager {
             .ok_or_else(|| anyhow!("ScriptStatus 未设置"))?
             .clone();
 
-        let mut next_chapter = script.intro_chapter.clone();
+        // 若已恢复存档进度（current_chapter_key 非空），从存档章节续跑；
+        // 否则按剧本 intro_chapter 正常开始。
+        let mut next_chapter = if !script.current_chapter_key.is_empty() {
+            script.current_chapter_key.clone()
+        } else {
+            script.intro_chapter.clone()
+        };
 
         // Resolve "Intro/intro" style paths → find the actual yaml file
         let chapters_dir = script.script_path.join("Chapters");
@@ -497,16 +559,23 @@ impl ScriptManager {
 
         // Extract data under one lock, then mutate under a second lock.
         // tokio::sync::Mutex is NOT reentrant — nesting lock().await deadlocks.
-        let (folder, is_adventure) = {
+        // 仅当当前 script_status 属于本次运行（纪元一致）时才记录/清理；
+        // 读档恢复的新剧本状态不会被旧任务的收尾误清。
+        let (folder, is_adventure, epoch_matches) = {
             let gs = ctx.game_status.lock().await;
+            let epoch_matches = gs.script_epoch == ctx.run_epoch;
             match gs.script_status.as_ref() {
-                Some(ss) => (Some(ss.path_key()), ss.adventure.is_adventure),
-                None => (None, false),
+                Some(ss) => (
+                    Some(ss.path_key()),
+                    ss.adventure.is_adventure,
+                    epoch_matches,
+                ),
+                None => (None, false, epoch_matches),
             }
         };
 
         // Now re-acquire the lock and do all writes in one critical section
-        {
+        if epoch_matches {
             let mut gs = ctx.game_status.lock().await;
             if let Some(folder) = folder {
                 if completed {
@@ -519,11 +588,16 @@ impl ScriptManager {
                 }
             }
             gs.script_status = None;
+            tracing::info!("[ScriptManager] 剧本状态已清除");
+        } else {
+            tracing::info!(
+                "[ScriptManager] 本次运行({})已结束，但当前剧本状态属于其他运行({})，跳过清理",
+                ctx.run_epoch,
+                ctx.game_status.lock().await.script_epoch
+            );
         }
 
         is_running.store(false, Ordering::SeqCst);
-
-        tracing::info!("[ScriptManager] 剧本状态已清除");
 
         Ok(())
     }

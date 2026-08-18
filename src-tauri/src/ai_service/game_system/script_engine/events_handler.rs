@@ -29,6 +29,14 @@ impl EventsHandler {
         }
     }
 
+    /// 从指定事件序号开始执行（读档续跑恢复用）。
+    /// 超出章节事件总数时回退到最后一个事件，保证 `chapter_end` 仍会执行、故事能继续。
+    pub fn with_progress(event_list: Vec<Value>, progress: usize) -> Self {
+        let mut handler = Self::new(event_list);
+        handler.progress = progress.min(handler.event_list.len().saturating_sub(1));
+        handler
+    }
+
     pub fn is_finished(&self) -> bool {
         self.chapter_result.is_some() || self.progress >= self.event_list.len()
     }

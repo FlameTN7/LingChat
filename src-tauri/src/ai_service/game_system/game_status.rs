@@ -46,6 +46,11 @@ pub struct GameStatus {
 
     pub script_status: Option<ScriptStatus>,
 
+    /// 剧本状态纪元：每次读档恢复剧本/启动剧本运行都会递增。
+    /// `on_script_end` 只清理与当前纪元一致的 `script_status`，
+    /// 防止「旧剧本任务的收尾」误清「读档新恢复的剧本状态」。
+    pub script_epoch: u64,
+
     /// 当前激活的存档 ID（用于 MemoryBank 持久化/载入/自动压缩）
     pub active_save_id: Option<i32>,
 
@@ -84,6 +89,7 @@ impl GameStatus {
             completed_scripts: HashSet::new(),
             last_dialog_time: None,
             script_status: None,
+            script_epoch: 0,
             active_save_id: None,
             preview_generation: 0,
             player_entered: false,

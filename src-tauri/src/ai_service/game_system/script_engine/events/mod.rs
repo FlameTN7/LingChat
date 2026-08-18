@@ -92,6 +92,11 @@ pub struct ScriptContext<'a> {
     /// 标记，前端据此丢弃中止后迟到的流式回复（见 `ReplyResponse.preview_gen`）。
     /// 正式游玩显式置 `false`。
     pub is_preview: bool,
+
+    /// 本次剧本运行的唯一纪元号（每次 start_script / 读档续跑递增）。
+    /// 用于区分「旧剧本任务」与「读档恢复的新状态」：旧任务的收尾
+    /// （on_script_end）只清理它自己那一代的状态，避免清掉新恢复的剧本。
+    pub run_epoch: u64,
 }
 
 // ============================================================

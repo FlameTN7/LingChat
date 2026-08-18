@@ -256,13 +256,145 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
         .await
         .map_err(|e| eprintln!("[SAVE_WARN] 恢复记忆库失败: {}", e));
 
-    // 9. 恢复剧本状态（若有）
+    // 8.3 若旧剧本任务仍在运行，abort 其句柄并等待收尾，避免双任务竞争：
+    //     旧任务会继续推进事件进度（导致存档事件序号超前于对话内容、续跑跳过剧情），
+    //     且新任务设置通道会顶掉旧任务的 sender，旧任务报"通道已关闭"后 teardown 会清掉新恢复的状态。
+    if service
+        .script_manager
+        .is_running
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        tracing::info!("[LoadSave] 检测到旧剧本任务仍在运行，正在中止并等待收尾...");
+        let handle = {
+            let mut current = service.script_manager.current_run.lock().await;
+            current.take()
+        };
+        if let Some(handle) = handle {
+            handle.abort();
+            // abort 后任务在其下一个 await 点被取消，此处等待其真正收尾
+            let _ = handle.await;
+        }
+        // 清掉通道残留（旧任务可能持有 sender），并复位运行标记：
+        // abort 不会走 on_script_end，故 is_running 需要手动复位。
+        let mut ch = state.script_channels.lock().await;
+        ch.input_tx = None;
+        ch.choice_tx = None;
+        ch.choice_allow_free = false;
+        drop(ch);
+        service
+            .script_manager
+            .is_running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // abort 后旧任务不会执行 on_script_end 清理，显式清掉残留的剧本状态，
+        // 下面第 9 步再按存档重建（无剧本的存档则保持 None，不会误报 active_script）。
+        service.game_status.lock().await.script_status = None;
+    }
+
+    // 8.5 为缺少 system 人设台词的发言/在场 NPC 补建 system 行（缓解"人设丢失"告警）。
+    //     仅补内存中的 line_list，下次存档时随 sync_lines 持久化。
+    {
+        use crate::ai_service::types::{GameLine, LineAttributeExt, LineBase};
+        use crate::db::entities::line::LineAttribute;
+        let mut gs = service.game_status.lock().await;
+        let mut involved: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for l in gs.line_list.iter() {
+            if let Some(sid) = l.base.sender_role_id {
+                if sid != 0 {
+                    involved.insert(sid);
+                }
+            }
+        }
+        involved.extend(gs.present_role_ids.iter().copied());
+        let has_system: std::collections::HashSet<i32> = gs
+            .line_list
+            .iter()
+            .filter(|l| matches!(l.attribute(), LineAttribute::System))
+            .filter_map(|l| l.base.sender_role_id)
+            .collect();
+        for rid in involved {
+            if has_system.contains(&rid) {
+                continue;
+            }
+            let (sys_prompt, display_name) = {
+                let role = match gs.role_manager.get_loaded(rid) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                if role
+                    .settings
+                    .system_prompt
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
+                    continue;
+                }
+                (
+                    crate::utils::prompt::sys_prompt_builder_by_settings(
+                        &role.settings,
+                        prompt_options,
+                    ),
+                    role.display_name.clone(),
+                )
+            };
+            let sys_line = LineBase {
+                content: sys_prompt,
+                attribute: LineAttributeExt(LineAttribute::System),
+                sender_role_id: Some(rid),
+                display_name,
+                ..Default::default()
+            };
+            gs.line_list.insert(0, GameLine::from_base(sys_line, vec![]));
+            tracing::info!("[LoadSave] 为角色 {} 补建 system 人设台词（存档缺少）", rid);
+        }
+    }
+
+    // 9. 恢复剧本状态（若有）——重建 script_status，使剧本可从存档章节续跑。
+    //    原实现只查询 running_script 后丢弃，导致读档后剧本永远无法继续。
     if let Some(rs_id) = save_model.running_script_id {
-        let _ = SaveRepo::get_running_script(db, rs_id).await;
+        if let Some(rs) = SaveRepo::get_running_script(db, rs_id)
+            .await
+            .map_err(|e| format!("查询剧本状态失败: {}", e))?
+        {
+            let script = service
+                .script_manager
+                .all_scripts
+                .values()
+                .find(|s| s.folder_key == rs.script_folder)
+                .cloned();
+            if let Some(mut script) = script {
+                script.current_chapter_key = rs.current_chapter.clone();
+                script.current_event_process = rs.event_sequence;
+                script.vars = serde_json::from_str(&rs.variable_info).unwrap_or_default();
+                let mut gs = service.game_status.lock().await;
+                gs.script_status = Some(script);
+                // 递增剧本纪元：此后旧剧本任务的收尾（on_script_end）不会清理这份新恢复的状态
+                gs.script_epoch = gs.script_epoch.wrapping_add(1);
+                tracing::info!(
+                    "[LoadSave] 已恢复剧本状态: {} 章节={} 事件={}",
+                    rs.script_folder,
+                    rs.current_chapter,
+                    rs.event_sequence
+                );
+            } else {
+                tracing::warn!(
+                    "[LoadSave] 存档引用的剧本 '{}' 未在剧本目录中找到，跳过剧本恢复",
+                    rs.script_folder
+                );
+            }
+        }
     }
 
     // 10. 返回前端初始化数据
-    build_web_init_data(&service, &app).await
+    let init = build_web_init_data(&service, &app).await?;
+    tracing::info!(
+        "[LoadSave] 读档完成: save_id={} 台词数={} active_script={:?}",
+        save_id,
+        init.lines.len(),
+        init.active_script
+    );
+    Ok(init)
 }
 
 #[tauri::command]
