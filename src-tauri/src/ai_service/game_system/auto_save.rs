@@ -164,6 +164,16 @@ impl AutoSaveManager {
             .map_err(|e| {
                 tracing::warn!("[AutoSave] 保存剧本状态失败: {}", e);
             });
+        } else {
+            // 无剧本进行中：清理该槽位残留的剧本状态。
+            // 否则新会话启动时（line_list 仅剩启动残留）会把对话覆盖成空，
+            // 而旧的事件序号残留在 running_script 里 → 产生"空对话 + 深位置"的损坏存档。
+            if let Ok(Some(save_model)) = SaveRepo::get_save_by_id(&self.db, save_id).await {
+                if let Some(rs_id) = save_model.running_script_id {
+                    let _ = SaveRepo::delete_running_script(&self.db, rs_id).await;
+                    let _ = SaveRepo::update_save_running_script(&self.db, save_id, None).await;
+                }
+            }
         }
 
         drop(service);
@@ -204,9 +214,11 @@ impl AutoSaveManager {
         let service = self.ai_service.lock().await;
         let lines = &service.game_status.lock().await.line_list;
 
-        // 初始化时 line_list 自带一条 system 台词（角色人设），
-        // 只有大于 1 条时才说明有实际对话发生，才需要自动存档。
-        if lines.len() <= 1 {
+        // 初始化时 line_list 自带 system 人设 + 可能的换装旁白（共 1~2 行），
+        // 这属于"启动残留"，不是实际会话内容——此时自动存档会把存档槽覆盖成空，
+        // 而残留的剧本事件序号却保留下来，产生"空对话 + 深位置"的损坏存档。
+        // 只有 >2 行时才说明有实际对话/剧本内容，才需要自动存档。
+        if lines.len() <= 2 {
             return None;
         }
 

@@ -47,6 +47,8 @@ pub struct WebInitData {
     pub last_bgm_mode: Option<String>,
     /// 上次环境音轨道（JSON 字符串，前端解析）
     pub last_ambient_tracks: Option<String>,
+    /// 当前进行中的剧本 folder_key（读档恢复剧本时，前端据此进入剧情模式并续跑）
+    pub active_script: Option<String>,
 }
 
 /// 精简的角色设定，匹配前端 `CharacterSettings` 接口
@@ -606,6 +608,13 @@ pub(crate) async fn build_web_init_data(
         last_bgm_paused,
         last_bgm_mode,
         last_ambient_tracks,
+        active_script: service
+            .game_status
+            .lock()
+            .await
+            .script_status
+            .as_ref()
+            .map(|s| s.folder_key.clone()),
     };
     Ok(result)
 }
