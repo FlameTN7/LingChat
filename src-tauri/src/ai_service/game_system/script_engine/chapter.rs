@@ -47,10 +47,14 @@ impl Chapter {
             0
         };
 
+        let mut events_handler = EventsHandler::with_progress(event_list, resume_progress);
+        // 记录章节 key，供 script:progress 广播携带（前端记录玩家阅读位置所在章节）
+        events_handler.chapter_key = chapter_id.clone();
+
         Self {
             _chapter_id: chapter_id,
             chapter_name,
-            events_handler: EventsHandler::with_progress(event_list, resume_progress),
+            events_handler,
         }
     }
 

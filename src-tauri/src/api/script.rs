@@ -197,3 +197,22 @@ pub async fn script_submit_choice(app: AppHandle, choice: String) -> Result<(), 
         Err("当前没有等待选择的脚本事件".to_string())
     }
 }
+
+/// 前端上报「玩家阅读位置」（章节 key + 事件序号）。
+///
+/// 剧本引擎预跑，存档记录的是引擎执行位置（可能超前于玩家实际读到的地方）；
+/// 玩家在读到每条消息时经 `script:progress` 拿到其事件序号，读档前把当前阅读位置
+/// 上报到这里暂存，手动/自动存档时写入 `running_script.player_read_*`，
+/// 读档据此从玩家阅读点续跑，而不是从引擎位置（避免"跳剧情"）。
+#[tauri::command]
+pub async fn update_player_read_position(
+    app: AppHandle,
+    chapter: String,
+    seq: i32,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut gs = state.ai_service.lock().await.game_status.lock().await;
+    gs.player_read_chapter = chapter;
+    gs.player_read_seq = seq.max(0);
+    Ok(())
+}

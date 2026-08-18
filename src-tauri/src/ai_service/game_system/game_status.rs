@@ -51,6 +51,13 @@ pub struct GameStatus {
     /// 防止「旧剧本任务的收尾」误清「读档新恢复的剧本状态」。
     pub script_epoch: u64,
 
+    /// 玩家阅读位置——章节 key（前端经 update_player_read_position 上报，瞬态不落快照）。
+    /// 存档时写入 running_script，读档据此从玩家实际阅读点续跑（而非引擎执行位置）。
+    pub player_read_chapter: String,
+
+    /// 玩家阅读位置——事件序号（前端上报，瞬态不落快照）。
+    pub player_read_seq: i32,
+
     /// 当前激活的存档 ID（用于 MemoryBank 持久化/载入/自动压缩）
     pub active_save_id: Option<i32>,
 
@@ -90,6 +97,8 @@ impl GameStatus {
             last_dialog_time: None,
             script_status: None,
             script_epoch: 0,
+            player_read_chapter: String::new(),
+            player_read_seq: 0,
             active_save_id: None,
             preview_generation: 0,
             player_entered: false,

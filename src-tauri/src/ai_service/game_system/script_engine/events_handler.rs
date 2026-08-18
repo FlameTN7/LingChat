@@ -8,7 +8,11 @@ use serde_json::Value;
 
 use crate::ai_service::game_system::game_status::GameStatus;
 use crate::ai_service::game_system::script_engine::events::{create_event, ScriptContext};
+use crate::ai_service::game_system::script_engine::responses::{
+    event_names::SCRIPT_PROGRESS, ScriptProgressPayload,
+};
 use crate::ai_service::game_system::script_engine::utils::script_function::replace_placeholder;
+use crate::ai_service::message_system::events::emit;
 
 /// Processes a chapter's event list sequentially.
 pub struct EventsHandler {
@@ -18,6 +22,9 @@ pub struct EventsHandler {
     pub event_list: Vec<Value>,
     /// Set when a chapter_end event returns a result (the next chapter name).
     pub chapter_result: Option<String>,
+    /// 当前章节 key（YAML 文件名）。script:progress 广播时随事件序号一起携带，
+    /// 供前端记录「玩家阅读位置」所在的章节。
+    pub chapter_key: String,
 }
 
 impl EventsHandler {
@@ -26,6 +33,7 @@ impl EventsHandler {
             progress: 0,
             event_list,
             chapter_result: None,
+            chapter_key: String::new(),
         }
     }
 
@@ -79,6 +87,17 @@ impl EventsHandler {
 
         let mut handler = create_event(&event_type, event_data)
             .ok_or_else(|| anyhow!("未注册的事件类型: '{}'", event_type))?;
+
+        // 事件实际执行前，向前端广播其（章节 + 事件序号）。不阻塞引擎（预跑不受影响）；
+        // 前端在事件队列里与其后的内容事件相邻、保序消费，据此记录「玩家阅读位置」。
+        let _ = emit(
+            ctx.app,
+            SCRIPT_PROGRESS,
+            &ScriptProgressPayload {
+                chapter: self.chapter_key.clone(),
+                seq: (self.progress - 1) as i32,
+            },
+        );
 
         if let Some(result) = handler.execute(ctx).await? {
             self.chapter_result = Some(result);

@@ -25,11 +25,25 @@ pub mod event_names {
     pub const SCRIPT_CHOICE: &str = "script:choice";
     pub const SCRIPT_END: &str = "script:end";
     pub const SCRIPT_FREE_DIALOGUE: &str = "script:free-dialogue";
+    /// 事件进度广播：每实际执行一个事件，把（章节 key + 事件序号）推给前端，
+    /// 前端据此记录「玩家阅读位置」，读档按玩家位置续跑（而非引擎执行位置）。
+    pub const SCRIPT_PROGRESS: &str = "script:progress";
 }
 
 // ============================================================
 // Payload types (fields match frontend `src/types/script.ts`)
 // ============================================================
+
+/// 剧本事件进度（script:progress）——引擎实际执行每个事件前广播一次。
+/// 不阻塞引擎（预跑不受影响）；前端在队列里与其后的内容事件相邻、保序消费。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptProgressPayload {
+    /// 当前章节 key（YAML 文件名，如 "main" / "Intro/intro"）
+    pub chapter: String,
+    /// 事件在章节事件数组中的序号
+    pub seq: i32,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
