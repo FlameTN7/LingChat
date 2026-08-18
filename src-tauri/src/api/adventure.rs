@@ -249,8 +249,10 @@ pub async fn start_adventure(app: AppHandle, adventure_folder: String) -> Result
     });
 
     // 登记当前运行句柄：读档等场景需要「掐断旧任务」时据此 abort 并等待收尾。
+    // 注意不能复用上面的 `ai_service`：它已被 async move 闭包整体移入，
+    // 这里用 `state` 重新取引用（AppHandle 仍可访问）。
     {
-        let service = ai_service.lock().await;
+        let service = state.ai_service.lock().await;
         *service.script_manager.current_run.lock().await = Some(handle);
     }
 

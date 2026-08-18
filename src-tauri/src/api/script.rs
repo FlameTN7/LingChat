@@ -146,8 +146,10 @@ pub async fn start_script(app: AppHandle, script_name: String) -> Result<(), Str
     });
 
     // 登记当前运行句柄：读档等场景需要「掐断旧任务」时据此 abort 并等待收尾。
+    // 注意不能复用上面的 `ai_service`：它已被 async move 闭包整体移入，
+    // 这里用 `state` 重新取引用（AppHandle 仍可访问）。
     {
-        let service = ai_service.lock().await;
+        let service = state.ai_service.lock().await;
         *service.script_manager.current_run.lock().await = Some(handle);
     }
 
@@ -211,7 +213,9 @@ pub async fn update_player_read_position(
     seq: i32,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let mut gs = state.ai_service.lock().await.game_status.lock().await;
+    // 链式 lock 会产生被提前释放的临时 guard（E0716），先绑定 service 再取 game_status
+    let service = state.ai_service.lock().await;
+    let mut gs = service.game_status.lock().await;
     gs.player_read_chapter = chapter;
     gs.player_read_seq = seq.max(0);
     Ok(())
