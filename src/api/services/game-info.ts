@@ -64,6 +64,8 @@ export interface WebInitData {
   last_bgm_mode?: string | null
   /** 上次会话环境音轨道（JSON 字符串） */
   last_ambient_tracks?: string | null
+  /** 当前进行中的剧本 folder_key（读档恢复剧本时，前端据此进入剧情模式并续跑） */
+  active_script?: string | null
 }
 
 /**

@@ -1,19 +1,24 @@
 import type { GameLine } from '@/api/services/history'
 import type { GameMessage } from '@/stores/modules/game/state'
+import { cleanLineContent, isPlotPromptLine } from './scriptText'
 
 export const convertToGameMessages = (lines: GameLine[]): GameMessage[] => {
-  // 先过滤掉 SYSTEM 类型的消息（虽然后端已经过滤了，但再加一层保障）
-  const filteredLines = lines.filter((line) => line.attribute !== 'SYSTEM' && line.attribute !== 'system' && line.attribute !== 'tool' && line.attribute !== 'TOOL')
+  // 先过滤掉 SYSTEM / TOOL 类型的消息（虽然后端已经过滤了，但再加一层保障）
+  const filteredLines = lines.filter(
+    (line) =>
+      line.attribute !== 'SYSTEM' &&
+      line.attribute !== 'system' &&
+      line.attribute !== 'tool' &&
+      line.attribute !== 'TOOL' &&
+      !isPlotPromptLine(line.content ?? ''),
+  )
 
   return filteredLines.map((line, index, array) => {
-    const filteredContent = line.content
-      .replace(/\{[\s\S]*?\}/g, '') // 删除所有 {...} 内容（包括换行）
-      .trim()
+    const filteredContent = cleanLineContent(line.content ?? '')
 
     const isLastMessage = index === array.length - 1
     const nextLine = isLastMessage ? null : array[index + 1]
 
-    console.log('line.attribute', line.attribute)
     let isFinal = false
     if (line.attribute === 'assistant') {
       if (isLastMessage || nextLine?.attribute === 'user') {

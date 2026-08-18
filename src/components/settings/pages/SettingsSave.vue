@@ -137,6 +137,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { MenuPage, MenuItem } from '../../ui'
 import { Input } from '../../base'
 import { useGameStore } from '../../../stores/modules/game'
@@ -161,6 +162,7 @@ interface CreateSaveResponse {
 const gameStore = useGameStore()
 const uiStore = useUIStore()
 const dialogStore = useDialogStore()
+const router = useRouter()
 const { t } = useI18n()
 
 const saves = ref<SaveInfo[]>([])
@@ -278,6 +280,27 @@ const handleLoadSave = async (saveId: number) => {
   try {
     const gameInfo = await invoke<WebInitData>('load_save', { saveId })
     applyWebInitData(gameStore.$state, gameInfo)
+    // 读档成功后直接进入对话页（原来卡在设置页，官方 PR #555 的修复方向）
+    uiStore.showSettings = false
+    await router.push('/chat')
+    // 若存档处于剧本进行中，自动进入剧情模式并从存档点续跑剧本。
+    // 后端单实例保护：load_save 已中止旧任务，若其仍在收尾，start_script 会返回明确错误，
+    // 这里短暂重试直到成功启动（避免读档后剧本静默不跑）。
+    if (gameInfo.active_script) {
+      gameStore.enterStoryMode(gameInfo.active_script)
+      let started = false
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try {
+          await invoke('start_script', { scriptName: gameInfo.active_script })
+          started = true
+          break
+        } catch (err) {
+          await new Promise((r) => setTimeout(r, 1000))
+          if (attempt >= 14) console.error('续跑剧本失败：多次尝试后仍无法启动', err)
+        }
+      }
+      console.log('[LoadSave] 读档续跑剧本:', gameInfo.active_script, '启动成功:', started)
+    }
     uiStore.showSuccess({ title: t('settings.save.msg.loadSuccessTitle'), message: t('settings.save.msg.loadSuccessMsg') })
   } catch (e: any) {
     console.error('读取存档失败:', e)
