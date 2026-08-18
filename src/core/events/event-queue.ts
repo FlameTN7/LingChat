@@ -1,6 +1,20 @@
 import type { ScriptEventType } from '../../types'
 import { eventProcessorManager } from './event-processor'
 import { useGameStore } from '../../stores/modules/game'
+import { invoke } from '@tauri-apps/api/core'
+
+// 玩家「真正读到」的内容事件类型：只有这些才推进玩家阅读位置。
+// 背景/音乐/特效等瞬时事件不代表阅读进度（引擎预跑它们时玩家还没看到），
+// 记录它们会让读档位置越过玩家实际读到的内容。
+const PLAYER_READ_EVENT_TYPES = new Set([
+  'narration',
+  'player',
+  'reply',
+  'free_dialogue',
+  'input',
+  'choice',
+  'present_pic',
+])
 
 export class EventQueue {
   private queue: ScriptEventType[] = []
@@ -49,6 +63,21 @@ export class EventQueue {
   }
 
   private async processSingleEvent(event: ScriptEventType): Promise<void> {
+    // 玩家阅读位置：内容事件展示时，用最近一次 script:progress 的（章节 + 序号）
+    // 作为「玩家已读到这」的位置，并上报后端暂存（手动/自动存档时据此写入存档）。
+    // 事件队列保序，progress 与其内容事件相邻，故此处读到的 pending 位置正对应当前内容。
+    if (PLAYER_READ_EVENT_TYPES.has(event.type)) {
+      const gameStore = useGameStore()
+      if (gameStore.pendingScriptSeq > 0) {
+        gameStore.displayedChapter = gameStore.pendingChapter
+        gameStore.displayedSeq = gameStore.pendingScriptSeq
+        invoke('update_player_read_position', {
+          chapter: gameStore.pendingChapter,
+          seq: gameStore.pendingScriptSeq,
+        }).catch((e) => console.warn('update_player_read_position 失败:', e))
+      }
+    }
+
     // 处理事件并等待完成
     await eventProcessorManager.processEvent(event)
 

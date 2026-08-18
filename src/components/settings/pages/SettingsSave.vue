@@ -255,6 +255,14 @@ const handleCreateSave = async () => {
   }
   actionLoading.value = -1
   try {
+    // 手动存档前兜底上报玩家阅读位置（正常路径已随内容展示实时上报，
+    // 这里覆盖「刚读到一行就立刻进设置页存档」的竞态窗口）
+    if (gameStore.displayedSeq > 0) {
+      await invoke('update_player_read_position', {
+        chapter: gameStore.displayedChapter,
+        seq: gameStore.displayedSeq,
+      }).catch(() => {})
+    }
     await invoke<CreateSaveResponse>('create_save', {
       title: newSaveTitle.value.trim(),
       screenshotPath: await ensureScreenshot(),

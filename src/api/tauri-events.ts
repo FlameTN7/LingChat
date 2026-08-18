@@ -355,6 +355,19 @@ export function initializeTauriEventListeners() {
     eventQueue.addEvent(asEvent(event.payload, { type: 'free_dialogue', defaultDuration: 0 }))
   })
 
+  // 剧本事件进度：引擎每实际执行一个事件前广播（章节 key + 事件序号）。
+  // 必须入队（而非独立监听直接改 store），保证与其后的内容事件保序消费——
+  // 这样「玩家阅读位置」记录的是真正展示给玩家的那条内容，而不是引擎预跑到的位置。
+  listen('script:progress', (event) => {
+    const p = event.payload as { chapter?: string; seq?: number }
+    eventQueue.addEvent({
+      type: 'progress',
+      duration: 0,
+      chapter: p.chapter ?? '',
+      seq: typeof p.seq === 'number' ? p.seq : 0,
+    } as ScriptEventType)
+  })
+
   // === God Agent multi-dialogue event ===
 
   listen('character:switch', async (event) => {

@@ -84,6 +84,11 @@ setGameMessages(this: GameState, messages: GameMessage[]) {
         endLine: '',
       },
     }
+    // 复位玩家阅读位置：本次运行的阅读位置随 script:progress 重新上报
+    this.pendingScriptSeq = 0
+    this.pendingChapter = ''
+    this.displayedSeq = 0
+    this.displayedChapter = ''
     const uiStore = useUIStore()
     uiStore.bgMusicMode = 'loop-single'
   },
@@ -91,6 +96,12 @@ setGameMessages(this: GameState, messages: GameMessage[]) {
   /** 标记退出剧情模式，回到自由对话模式 */
   exitStoryMode(this: GameState) {
     this.runningScript = null
+    // 复位玩家阅读位置：自由对话期间不产生 script:progress，
+    // 不复位会让 free chat 消息误记到剧本位置
+    this.pendingScriptSeq = 0
+    this.pendingChapter = ''
+    this.displayedSeq = 0
+    this.displayedChapter = ''
   },
 
   // 设置当前场景（仅更新 store，不调用 API）

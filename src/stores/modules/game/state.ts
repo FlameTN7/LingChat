@@ -77,6 +77,15 @@ export interface GameState {
   currentScene: SceneInfo | null // 当前加载的场景
   command: string | null
 
+  /** 最近一次 script:progress 广播的事件序号（其后的内容事件即对应此序号，瞬态不持久化） */
+  pendingScriptSeq: number
+  /** 最近一次 script:progress 广播的章节 key（瞬态不持久化） */
+  pendingChapter: string
+  /** 玩家最近「已展示」的剧本事件序号：读档时上报给后端，作为玩家阅读位置（瞬态不持久化） */
+  displayedSeq: number
+  /** 玩家最近「已展示」的章节 key（瞬态不持久化） */
+  displayedChapter: string
+
   initialized: boolean
   latestScreenshot: string | null
   /** 正在进行的截图 Promise，供 save handler 等待 */
@@ -100,6 +109,11 @@ export const state: GameState = {
   dialogHistory: [],
   currentScene: null,
   command: null,
+
+  pendingScriptSeq: 0,
+  pendingChapter: '',
+  displayedSeq: 0,
+  displayedChapter: '',
 
   initialized: false,
   latestScreenshot: null,

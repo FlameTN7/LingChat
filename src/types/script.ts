@@ -138,6 +138,16 @@ export interface ScriptStatusResetEvent extends ScriptEvent {
   status?: string
 }
 
+/** 剧本事件进度广播：引擎实际执行每个事件前推送（章节 key + 事件序号）。
+ *  前端在事件队列里与其后的内容事件相邻、保序消费，据此记录「玩家阅读位置」。 */
+export interface ScriptProgressEvent extends ScriptEvent {
+  type: 'progress'
+  /** 当前章节 key（YAML 文件名，如 "main" / "Intro/intro"） */
+  chapter: string
+  /** 事件在章节事件数组中的序号 */
+  seq: number
+}
+
 export type ScriptEventType =
   | ScriptNarrationEvent
   | ScriptDialogueEvent
@@ -157,3 +167,4 @@ export type ScriptEventType =
   | ScriptChoiceEvent
   | ScriptPresentPicEvent
   | ScriptFreeDialogueEvent
+  | ScriptProgressEvent
