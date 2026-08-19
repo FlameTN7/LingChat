@@ -123,6 +123,11 @@ export class EventQueue {
       this.currentResolve = null
     }
 
+    // 通知剧本引擎：当前事件已展示完毕、玩家已继续。引擎在旁白/主人公/立绘等
+    // 阅读型事件上等待此回执，从而让台词写入与玩家阅读同步（引擎与画面锁步，
+    // 避免预跑把超前剧情写进 line_list、存档捕获未读内容）。
+    invoke('script_event_continue').catch((e) => console.warn('script_event_continue 失败:', e))
+
     // 假如当前消息不是最后一个，但是队列事件已经没了
     if (!this.currentEvent?.isFinal && this.queue.length === 0) {
       needWait = true

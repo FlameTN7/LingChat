@@ -308,9 +308,12 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
         );
         // 清掉通道残留（旧任务可能持有 sender），并复位运行标记：
         // abort 不会走 on_script_end，故 is_running 需要手动复位。
+        // continue_tx 一并清掉：旧任务可能正等在旁白「继续」回执上，残留的 sender
+        // 会干扰新任务的事件推进。
         let mut ch = state.script_channels.lock().await;
         ch.input_tx = None;
         ch.choice_tx = None;
+        ch.continue_tx = None;
         ch.choice_allow_free = false;
         drop(ch);
         service

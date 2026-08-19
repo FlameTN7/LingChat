@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::ai_service::game_system::script_engine::events::{
-    parse_duration, register_event, ScriptContext, ScriptEvent,
+    parse_duration, register_event, wait_for_frontend_continue, ScriptContext, ScriptEvent,
 };
 use crate::ai_service::game_system::script_engine::responses::{
     event_names::SCRIPT_NARRATION, NarrationPayload,
@@ -48,6 +48,10 @@ impl ScriptEvent for NarrationEvent {
             .filter(|line| !line.is_empty())
             .collect();
 
+        // 逐行 emit + 逐行等待前端「继续」：
+        // 1) 让引擎与玩家阅读同步（预跑否则会把后续剧情整段写进 line_list，存档捕获超前内容）；
+        // 2) 逐行等待使「点击继续的次数」与「等待次数」严格 1:1，多行旁白不会产生多余回执
+        //    提前推进下一个事件。
         for line in lines {
             let payload = NarrationPayload {
                 text: line.to_string(),
@@ -55,9 +59,14 @@ impl ScriptEvent for NarrationEvent {
                 duration: self.duration,
             };
             let _ = emit(ctx.app, SCRIPT_NARRATION, &payload);
+            // 带 duration（YAML 明确自动推进）时不阻塞，与前端 shouldWaitForUser 语义一致；
+            // 缺省则逐行等待玩家「继续」，让台词写入与阅读同步（见 execute 头注释）。
+            if self.duration.is_none() {
+                wait_for_frontend_continue(&ctx.channels).await;
+            }
         }
 
-        // Add as ASSISTANT line (keep the original text with newlines)
+        // 玩家读完所有行后才写入台词（line_list 与玩家阅读对齐，存档不捕获超前内容）
         let line = LineBase {
             content: PromptRole::Narrator.build_prompt(&self.text.clone()),
             attribute: LineAttributeExt(LineAttribute::User),

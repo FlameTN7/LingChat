@@ -53,6 +53,13 @@ pub struct ScriptChannels {
     /// `script_submit_input` 据此判断：当选项挂起时，输入框里打的字可以转投
     /// `choice_tx` 而不是被拒绝——否则选项永远无法解决，剧本永久阻塞。
     pub choice_allow_free: bool,
+    /// 旁白/主人公/立绘等「按玩家阅读节奏显示」的事件，等待前端确认玩家已继续。
+    ///
+    /// 引擎在这些事件上等待，使**台词写入（line_list）与玩家实际阅读同步**——
+    /// 否则引擎预跑会把后续剧情整段写进 line_list，存档捕获到「尚未行进至」的内容，
+    /// 读档后历史出现超前剧情、位置错乱。玩家点击「继续」经 `script_event_continue`
+    /// 在此通道上回执，引擎再推进。
+    pub continue_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl ScriptChannels {
@@ -61,8 +68,22 @@ impl ScriptChannels {
             input_tx: None,
             choice_tx: None,
             choice_allow_free: false,
+            continue_tx: None,
         }
     }
+}
+
+/// 等待前端展示完当前事件并由玩家点击「继续」（引擎与画面/台词同步推进）。
+/// 带 10 分钟超时兜底，防止前端异常时剧本永久挂起（试玩中止等场景由
+/// `editor_stop_preview` 显式清通道解除）。
+pub async fn wait_for_frontend_continue(channels: &SharedScriptChannels) {
+    let rx = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut ch = channels.lock().await;
+        ch.continue_tx = Some(tx);
+        rx
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(600), rx).await;
 }
 
 pub type SharedScriptChannels = Arc<Mutex<ScriptChannels>>;

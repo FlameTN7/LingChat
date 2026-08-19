@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::ai_service::game_system::script_engine::events::{
-    parse_duration, register_event, ScriptContext, ScriptEvent,
+    parse_duration, register_event, wait_for_frontend_continue, ScriptContext, ScriptEvent,
 };
 use crate::ai_service::game_system::script_engine::responses::{
     event_names::SCRIPT_PLAYER, PlayerPayload,
@@ -58,6 +58,12 @@ impl ScriptEvent for PlayerEvent {
             ..Default::default()
         };
         ctx.game_status.lock().await.add_line(ctx.db, line).await?;
+
+        // 与旁白一致：等待前端展示完并点击「继续」后再推进（引擎与画面/台词同步）。
+        // 带 duration（自动推进）时不阻塞，与前端 shouldWaitForUser 语义一致。
+        if self.duration.is_none() {
+            wait_for_frontend_continue(&ctx.channels).await;
+        }
 
         Ok(None)
     }

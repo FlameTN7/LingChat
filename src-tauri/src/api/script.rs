@@ -203,6 +203,19 @@ pub async fn script_submit_choice(app: AppHandle, choice: String) -> Result<(), 
     }
 }
 
+/// 前端告知剧本引擎：当前事件已展示完毕、玩家已点击「继续」。
+/// 旁白/主人公/立绘等「阅读型事件」会在此通道上等待，实现引擎与玩家阅读同步推进
+/// （台词写入与玩家实际阅读对齐，存档不捕获超前剧情）。前端在每条消息点「继续」时调用。
+#[tauri::command]
+pub async fn script_event_continue(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut channels = state.script_channels.lock().await;
+    if let Some(tx) = channels.continue_tx.take() {
+        let _ = tx.send(());
+    }
+    Ok(())
+}
+
 /// 前端上报「玩家阅读位置」（章节 key + 事件序号）。
 ///
 /// 剧本引擎预跑，存档记录的是引擎执行位置（可能超前于玩家实际读到的地方）；

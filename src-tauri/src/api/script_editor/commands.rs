@@ -1910,6 +1910,9 @@ pub async fn editor_stop_preview(app: AppHandle) -> Result<(), String> {
         if let Some(tx) = ch.input_tx.take() {
             let _ = tx.send(String::new());
         }
+        // 清掉旁白等「阅读型事件」的继续回执通道：试玩中止时若引擎正等在
+        // continue_tx 上，不清理会一直挂到 10 分钟超时兜底。
+        ch.continue_tx = None;
         ch.choice_allow_free = false;
     }
 
