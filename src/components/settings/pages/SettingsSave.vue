@@ -307,14 +307,33 @@ const handleLoadSave = async (saveId: number) => {
     // 未完成（罕见）时短重试，避免长时间空白。
     if (gameInfo.active_script) {
       gameStore.enterStoryMode(gameInfo.active_script)
+      // 过渡态置为「等待内容」：eventQueue.clear() 会把 currentStatus 复位成 'input'，
+      // 若续跑的第一条内容事件（narration/player/input…）未及时到达，输入框会误现，
+      // 此时提交会报「当前没有等待输入的脚本事件」。先置 responding，等引擎事件按序覆盖。
+      gameStore.currentStatus = 'responding'
+      let started = false
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
           await invoke('start_script', { scriptName: gameInfo.active_script })
+          started = true
           break
         } catch (err) {
           if (attempt < 4) await new Promise((r) => setTimeout(r, 500))
-          else console.error('续跑剧本失败：多次尝试后仍无法启动', err)
+          else {
+            console.error('续跑剧本失败：多次尝试后仍无法启动', err)
+            uiStore.showError({
+              title: t('settings.save.msg.loadFailTitle'),
+              message:
+                (typeof err === 'string' ? err : (err as any)?.message) ||
+                t('settings.save.msg.unknownError'),
+            })
+          }
         }
+      }
+      if (!started) {
+        // 续跑失败：退出剧本模式回到自由对话，避免停在"半剧本"假死界面
+        gameStore.exitStoryMode()
+        gameStore.currentStatus = 'input'
       }
     }
 

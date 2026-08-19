@@ -18,7 +18,13 @@ export function cleanLineContent(raw: string): string {
 export function isPlotPromptLine(raw: string): boolean {
   if (raw.startsWith('{旁白:') && raw.endsWith('}')) {
     const inner = raw.slice('{旁白:'.length, -1).trim()
-    return inner.startsWith('（接下来的剧情演绎提示')
+    // 剧本 ai_dialogue 的 prompt 包装成「（接下来的剧情演绎提示：…）」；
+    // 主动对话/日程提醒等系统注入写成「（系统提示：…）」。两类都是写给 LLM
+    // 的上下文 prompt，不该作为「对话历史」展示给玩家。
+    return (
+      inner.startsWith('（接下来的剧情演绎提示') ||
+      inner.startsWith('（系统提示')
+    )
   }
   return false
 }
