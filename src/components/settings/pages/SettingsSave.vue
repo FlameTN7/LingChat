@@ -145,6 +145,7 @@ import { applyWebInitData } from '../../../stores/modules/game/actions'
 import { useUIStore } from '../../../stores/modules/ui/ui'
 import { useDialogStore } from '../../../stores/modules/ui/dialog'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { eventQueue } from '@/core/events/event-queue'
 import type { SaveInfo } from '../../../types'
 import type { WebInitData } from '../../../api/services/game-info'
 import { Save as SaveIcon, PencilLine, LayoutList, Clock } from 'lucide-vue-next'
@@ -288,28 +289,38 @@ const handleLoadSave = async (saveId: number) => {
   try {
     const gameInfo = await invoke<WebInitData>('load_save', { saveId })
     applyWebInitData(gameStore.$state, gameInfo)
+    // 读档本身已成功：先给反馈，不因后续续跑启动（慢/重试）卡住 toast。
+    uiStore.showSuccess({ title: t('settings.save.msg.loadSuccessTitle'), message: t('settings.save.msg.loadSuccessMsg') })
+
+    // 关键：清空事件队列，丢弃旧剧本任务预跑遗留的事件（narration/ai:reply 等）。
+    // 读档前旧任务在后台预跑，其事件已进入队列；不清空会漏进新会话的历史/位置，
+    // 造成「历史出现超前内容」「读档后越读越靠后」「输入通道报错」。
+    // clear 会把 paused 置 true，稍后由本函数显式 resume（/chat 已挂载时不会重触发 MainChat 的 resume）。
+    eventQueue.clear()
+
     // 读档成功后直接进入对话页（原来卡在设置页，官方 PR #555 的修复方向）
     uiStore.showSettings = false
     await router.push('/chat')
+
     // 若存档处于剧本进行中，自动进入剧情模式并从存档点续跑剧本。
-    // 后端单实例保护：load_save 已中止旧任务，若其仍在收尾，start_script 会返回明确错误，
-    // 这里短暂重试直到成功启动（避免读档后剧本静默不跑）。
+    // load_save 已中止旧任务并复位 is_running，一次启动通常成功；仅旧任务收尾
+    // 未完成（罕见）时短重试，避免长时间空白。
     if (gameInfo.active_script) {
       gameStore.enterStoryMode(gameInfo.active_script)
-      let started = false
-      for (let attempt = 0; attempt < 15; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
         try {
           await invoke('start_script', { scriptName: gameInfo.active_script })
-          started = true
           break
         } catch (err) {
-          await new Promise((r) => setTimeout(r, 1000))
-          if (attempt >= 14) console.error('续跑剧本失败：多次尝试后仍无法启动', err)
+          if (attempt < 4) await new Promise((r) => setTimeout(r, 500))
+          else console.error('续跑剧本失败：多次尝试后仍无法启动', err)
         }
       }
-      console.log('[LoadSave] 读档续跑剧本:', gameInfo.active_script, '启动成功:', started)
     }
-    uiStore.showSuccess({ title: t('settings.save.msg.loadSuccessTitle'), message: t('settings.save.msg.loadSuccessMsg') })
+
+    // 恢复事件队列消费（clear 把 paused 置 true；MainChat 若已挂载不会重触发 resume，
+    // 这里显式恢复，让续跑后的新剧本事件按序展示）。
+    eventQueue.resume()
   } catch (e: any) {
     console.error('读取存档失败:', e)
     uiStore.showError({

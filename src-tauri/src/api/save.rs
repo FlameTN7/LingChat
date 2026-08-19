@@ -219,6 +219,7 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
     let db = &state.db;
 
     let mut service = state.ai_service.lock().await;
+    let load_started = std::time::Instant::now();
 
     // 1. 获取存档
     let save_model = SaveRepo::get_save_by_id(db, save_id)
@@ -230,6 +231,11 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
     let line_list = SaveRepo::get_gameline_list(db, save_id)
         .await
         .map_err(|e| format!("读取台词失败: {}", e))?;
+    tracing::info!(
+        "[LoadSave] 读取存档与台词: {} 行, 耗时 {:.0}ms",
+        line_list.len(),
+        load_started.elapsed().as_millis()
+    );
 
     // 3. 获取主角 role_id
     let main_role_id = save_model
@@ -272,6 +278,10 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
         .restore_memory_banks(save_id)
         .await
         .map_err(|e| eprintln!("[SAVE_WARN] 恢复记忆库失败: {}", e));
+    tracing::info!(
+        "[LoadSave] 导入设定/载入台词/恢复快照/记忆库完成, 耗时 {:.0}ms",
+        load_started.elapsed().as_millis()
+    );
 
     // 8.3 若旧剧本任务仍在运行，abort 其句柄并等待收尾，避免双任务竞争：
     //     旧任务会继续推进事件进度（导致存档事件序号超前于对话内容、续跑跳过剧情），
@@ -282,6 +292,7 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
         .load(std::sync::atomic::Ordering::SeqCst)
     {
         tracing::info!("[LoadSave] 检测到旧剧本任务仍在运行，正在中止并等待收尾...");
+        let abort_started = std::time::Instant::now();
         let handle = {
             let mut current = service.script_manager.current_run.lock().await;
             current.take()
@@ -291,6 +302,10 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
             // abort 后任务在其下一个 await 点被取消，此处等待其真正收尾
             let _ = handle.await;
         }
+        tracing::info!(
+            "[LoadSave] 旧剧本任务中止完成, 耗时 {:.0}ms",
+            abort_started.elapsed().as_millis()
+        );
         // 清掉通道残留（旧任务可能持有 sender），并复位运行标记：
         // abort 不会走 on_script_end，故 is_running 需要手动复位。
         let mut ch = state.script_channels.lock().await;
@@ -431,10 +446,11 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
     // 10. 返回前端初始化数据
     let init = build_web_init_data(&service, &app).await?;
     tracing::info!(
-        "[LoadSave] 读档完成: save_id={} 台词数={} active_script={:?}",
+        "[LoadSave] 读档完成: save_id={} 台词数={} active_script={:?} 总耗时 {:.0}ms",
         save_id,
         init.lines.len(),
-        init.active_script
+        init.active_script,
+        load_started.elapsed().as_millis()
     );
     Ok(init)
 }
