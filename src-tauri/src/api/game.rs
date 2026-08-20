@@ -608,13 +608,17 @@ pub(crate) async fn build_web_init_data(
         last_bgm_paused,
         last_bgm_mode,
         last_ambient_tracks,
+        // 用 name（story_config 的 script_name）而非 folder_key：start_script 通过
+        // `all_scripts.get(name)` 定位剧本（all_scripts 的 key 是 name），folder_key
+        // 只用于 load_save 恢复时的匹配。这里若返回 folder_key，读档续跑会因
+        // 「剧本不存在」失败（常见于 script_name 与目录名不同的剧本）。
         active_script: service
             .game_status
             .lock()
             .await
             .script_status
             .as_ref()
-            .map(|s| s.folder_key.clone()),
+            .map(|s| s.name.clone()),
     };
     Ok(result)
 }

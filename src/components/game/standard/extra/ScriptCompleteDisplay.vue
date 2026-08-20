@@ -94,8 +94,10 @@ const completedScriptName = ref('')
 watch(
   () => gameStore.runningScript,
   (newVal, oldVal) => {
-    // 从有剧本变成无剧本时触发
-    if (!newVal && oldVal) {
+    // 仅当「剧本正常完成」（script:end completed=true，scriptEndCompleted 已置位）
+    // 且 runningScript 从有变无时触发——读档续跑失败、手动退出等非完成路径
+    // 不会误显示「本次剧本已完成」。
+    if (!newVal && oldVal && gameStore.scriptEndCompleted) {
       // 提取剧本名称，根据你的数据结构调整
       completedScriptName.value = oldVal.scriptName || 'Unknown Script'
 

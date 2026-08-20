@@ -89,6 +89,8 @@ setGameMessages(this: GameState, messages: GameMessage[]) {
     this.pendingChapter = ''
     this.displayedSeq = 0
     this.displayedChapter = ''
+    // 复位「剧本正常完成」标志：每次进入剧本，上一轮是否完成的记录作废
+    this.scriptEndCompleted = false
     const uiStore = useUIStore()
     uiStore.bgMusicMode = 'loop-single'
   },

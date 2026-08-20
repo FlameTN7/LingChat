@@ -68,7 +68,10 @@ export class EventQueue {
     // 事件队列保序，progress 与其内容事件相邻，故此处读到的 pending 位置正对应当前内容。
     if (PLAYER_READ_EVENT_TYPES.has(event.type)) {
       const gameStore = useGameStore()
-      if (gameStore.pendingScriptSeq > 0) {
+      // 用 pendingChapter 非空表示「收到过 progress」，而非 seq > 0：
+      // 首个内容事件（如剧本第一行旁白）的事件序号就是 0，若按 seq>0 会漏报，
+      // 读档时 player_read 为空只能回退到引擎位置。
+      if (gameStore.pendingChapter) {
         gameStore.displayedChapter = gameStore.pendingChapter
         gameStore.displayedSeq = gameStore.pendingScriptSeq
         invoke('update_player_read_position', {

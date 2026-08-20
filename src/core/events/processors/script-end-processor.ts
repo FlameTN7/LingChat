@@ -24,6 +24,9 @@ export default class ScriptEndProcessor implements IEventProcessor {
     }
 
     const gameStore = useGameStore()
+    // 标记「剧本正常完成」：ScriptCompleteDisplay 据此显示 Story Clear。
+    // 失败退出（completed=false）或其他退出路径不置位，避免误显示「本次剧本已完成」。
+    gameStore.scriptEndCompleted = completed
     gameStore.exitStoryMode()
     const uiStore = useUIStore()
     uiStore.showPlayerHintLine = ''

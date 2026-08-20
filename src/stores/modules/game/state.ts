@@ -85,6 +85,9 @@ export interface GameState {
   displayedSeq: number
   /** 玩家最近「已展示」的章节 key（瞬态不持久化） */
   displayedChapter: string
+  /** 剧本是否正常完成（script:end 的 completed=true）：供「剧本已完成」提示判断。
+   *  读档续跑失败/手动退出等「非完成退出」不置位，避免误显示 Story Clear（瞬态不持久化） */
+  scriptEndCompleted: boolean
 
   initialized: boolean
   latestScreenshot: string | null
@@ -114,6 +117,7 @@ export const state: GameState = {
   pendingChapter: '',
   displayedSeq: 0,
   displayedChapter: '',
+  scriptEndCompleted: false,
 
   initialized: false,
   latestScreenshot: null,

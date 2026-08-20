@@ -187,10 +187,13 @@ pub async fn create_save(
             } else {
                 Some(gs.player_read_chapter.clone())
             };
-            let player_read_sequence = if gs.player_read_seq > 0 {
-                Some(gs.player_read_seq)
-            } else {
+            // 以 player_read_chapter 非空为「是否上报过」标志：首个内容事件的事件
+            // 序号可能是 0（如剧本第一行旁白），不能因 seq>0 而漏存——否则读档
+            // 时玩家位置为空，只能回退引擎位置。
+            let player_read_sequence = if gs.player_read_chapter.is_empty() {
                 None
+            } else {
+                Some(gs.player_read_seq.max(0))
             };
             let _ = SaveRepo::upsert_running_script(
                 db,
@@ -515,10 +518,13 @@ pub async fn update_save(
             } else {
                 Some(gs.player_read_chapter.clone())
             };
-            let player_read_sequence = if gs.player_read_seq > 0 {
-                Some(gs.player_read_seq)
-            } else {
+            // 以 player_read_chapter 非空为「是否上报过」标志：首个内容事件的事件
+            // 序号可能是 0（如剧本第一行旁白），不能因 seq>0 而漏存——否则读档
+            // 时玩家位置为空，只能回退引擎位置。
+            let player_read_sequence = if gs.player_read_chapter.is_empty() {
                 None
+            } else {
+                Some(gs.player_read_seq.max(0))
             };
             let _ = SaveRepo::upsert_running_script(
                 db,
