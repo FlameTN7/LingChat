@@ -10,6 +10,8 @@ export const convertToGameMessages = (lines: GameLine[]): GameMessage[] => {
       line.attribute !== 'system' &&
       line.attribute !== 'tool' &&
       line.attribute !== 'TOOL' &&
+      // 「系统旁白」：入场问候/换装等系统注入旁白，不作为对话历史展示
+      line.display_name !== '系统旁白' &&
       !isPlotPromptLine(line.content ?? ''),
   )
 

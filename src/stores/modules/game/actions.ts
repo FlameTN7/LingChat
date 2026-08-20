@@ -266,6 +266,9 @@ export function convertInitLines(lines: GameLineInit[]): GameMessage[] {
     (line) =>
       line.attribute !== 'system' &&
       line.attribute !== 'tool' &&
+      // 「系统旁白」：入场问候/换装等系统注入的旁白（display_name 专用标记），
+      // 不作为对话历史展示；真实旁白（narration）display_name 为「旁白」，不受影响。
+      line.display_name !== '系统旁白' &&
       !isPlotPromptLine(line.content ?? ''),
   )
 

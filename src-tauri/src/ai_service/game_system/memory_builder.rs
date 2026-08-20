@@ -127,7 +127,7 @@ impl MemoryBuilder {
                             .map(|l| {
                                 let name = l.base.display_name.as_deref().unwrap_or("未知");
                                 let s = match name {
-                                    "旁白" | "系统" => l.base.content.clone(),
+                                    "旁白" | "系统" | "系统旁白" => l.base.content.clone(),
                                     _ => format!("{}: {}", name, l.base.content),
                                 };
                                 s

@@ -200,7 +200,9 @@ impl GameStatus {
             LineBase {
                 content: PromptRole::Narrator.build_prompt(&prompt),
                 attribute: LineAttributeExt(LineAttribute::User),
-                display_name: Some("旁白".to_string()),
+                // 「系统旁白」标记：换装/入场等系统注入的旁白，不进对话历史
+                // （前端按 display_name 过滤），但保留在 line_list 供 LLM 上下文。
+                display_name: Some("系统旁白".to_string()),
                 ..Default::default()
             },
         )

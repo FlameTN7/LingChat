@@ -892,7 +892,9 @@ pub async fn notify_player_entry(app: AppHandle) -> Result<(), String> {
             LineBase {
                 content: prompt,
                 attribute: LineAttributeExt(LineAttribute::User),
-                display_name: Some("旁白".to_string()),
+                // 「系统旁白」标记：入场问候是系统注入的旁白，不进对话历史
+                // （前端按 display_name 过滤），但保留在 line_list 供 AI 开场回复上下文。
+                display_name: Some("系统旁白".to_string()),
                 ..Default::default()
             },
         )
