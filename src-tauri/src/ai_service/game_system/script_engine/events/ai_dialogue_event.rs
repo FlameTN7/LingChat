@@ -111,7 +111,34 @@ impl ScriptEvent for AIDialogueEvent {
         };
 
         let generator = MessageGenerator::new(deps);
-        generator.process_message(None).await?;
+
+        // LLM 调用失败（网络抖动/服务瞬时错误）时重试，避免一次失败就中断整个剧本
+        // （run_to_completion 会把玩家踢回自由对话）。上限 3 次、间隔递增；持续失败
+        // 才向上抛错，由 run_to_completion 统一收尾。LLM 未配置在更早处已拦截，不在此重试。
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..3 {
+            match generator.process_message(None).await {
+                Ok(_) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    tracing::warn!(
+                        "[AIDialogueEvent] LLM 生成失败（第 {}/3 次），退避后重试: {}",
+                        attempt + 1,
+                        last_err.as_ref().expect("last_err 已赋值")
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        500 * (attempt as u64 + 1),
+                    ))
+                    .await;
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e);
+        }
 
         tracing::info!("[AIDialogueEvent] 执行完毕");
 

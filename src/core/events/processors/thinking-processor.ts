@@ -15,8 +15,12 @@ export default class ThinkingProcessor implements IEventProcessor {
       gameStore.currentStatus = 'thinking'
       gameStore.thinkingLength = 0
     } else {
-      // AI 停止思考（通常是错误恢复），重置到可输入状态
-      gameStore.currentStatus = 'input'
+      // AI 停止思考。自由对话模式回到可输入状态；剧本模式下不拉回 'input'：
+      // 后面还有剧本事件（narration/player/input…）会按序覆盖状态，提前回到
+      // input 会让 AI 对话读档/续跑场景误现输入框（玩家名 + 输入框）。
+      if (!gameStore.runningScript) {
+        gameStore.currentStatus = 'input'
+      }
       gameStore.currentLine = ''
       gameStore.thinkingLength = 0
     }

@@ -414,16 +414,55 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
                     };
                     p.exists()
                 };
-                let (restore_chapter, restore_seq) = match rs.player_read_chapter.as_deref() {
-                    Some(ch) if !ch.is_empty() && chapter_exists(ch) => (
-                        rs.player_read_chapter.clone().unwrap_or_default(),
-                        rs.player_read_sequence.unwrap_or(rs.event_sequence),
-                    ),
-                    _ => (rs.current_chapter.clone(), rs.event_sequence),
-                };
+                let (restore_chapter, restore_seq, from_player_read) =
+                    match rs.player_read_chapter.as_deref() {
+                        Some(ch) if !ch.is_empty() && chapter_exists(ch) => (
+                            rs.player_read_chapter.clone().unwrap_or_default(),
+                            rs.player_read_sequence.unwrap_or(rs.event_sequence),
+                            true,
+                        ),
+                        _ => (rs.current_chapter.clone(), rs.event_sequence, false),
+                    };
 
-                script.current_chapter_key = restore_chapter;
+                script.current_chapter_key = restore_chapter.clone();
                 script.current_event_process = restore_seq;
+
+                // 读档续跑：若恢复位置来自「玩家阅读位置」且指向「AI 对话」事件，
+                // 说明玩家已看过该事件的回复（前端只在内容展示时上报位置）。
+                // 前进一位跳过它，避免读档后重新调用 LLM 生成——那会带来数秒延迟、
+                // 回复内容变化，且网络失败会直接中断整个剧本（玩家被踢回自由对话）。
+                // 仅玩家阅读位置触发跳过：引擎位置代表「正在执行/可能尚未看到」，不跳过。
+                if from_player_read {
+                    let chapter_path = if restore_chapter.ends_with(".yaml") {
+                        script.script_path.join("Chapters").join(&restore_chapter)
+                    } else {
+                        script
+                            .script_path
+                            .join("Chapters")
+                            .join(format!("{}.yaml", restore_chapter))
+                    };
+                    if let Ok(content) = std::fs::read_to_string(&chapter_path) {
+                        if let Ok(serde_yaml::Value::Mapping(map)) =
+                            serde_yaml::from_str::<serde_yaml::Value>(&content)
+                        {
+                            if let Some(serde_yaml::Value::Sequence(events)) = map.get("events") {
+                                if let Some(serde_yaml::Value::Mapping(ev)) =
+                                    events.get(restore_seq.max(0) as usize)
+                                {
+                                    if ev.get("type").and_then(|v| v.as_str())
+                                        == Some("ai_dialogue")
+                                    {
+                                        script.current_event_process += 1;
+                                        tracing::info!(
+                                            "[LoadSave] 恢复位置指向已展示的 AI 对话事件（#{}），前进一位跳过，不重新调用 LLM",
+                                            restore_seq
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 script.vars = serde_json::from_str(&rs.variable_info).unwrap_or_default();
                 let mut gs = service.game_status.lock().await;
                 gs.script_status = Some(script);
