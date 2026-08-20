@@ -236,3 +236,38 @@ pub async fn update_player_read_position(
     gs.player_read_seq = seq.max(0);
     Ok(())
 }
+
+/// 中止当前正在运行的剧本任务并复位运行标记（前端退出剧本模式时调用）。
+///
+/// 剧本的 AI 对话事件在 LLM 调用失败时会**持续重试不终止**（玩家不能被踢出剧本）；
+/// 若玩家主动退出剧本而后台任务仍在跑（is_running 仍为 true），不中止会导致
+/// 之后无法再次启动剧本（CAS 守卫拒绝）。abort 不走 on_script_end，
+/// 此处显式清理输入/选择/继续通道与剧本状态。
+#[tauri::command]
+pub async fn stop_script(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut service = state.ai_service.lock().await;
+
+    let handle = {
+        let mut current = service.script_manager.current_run.lock().await;
+        current.take()
+    };
+    if let Some(handle) = handle {
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    let mut ch = state.script_channels.lock().await;
+    ch.input_tx = None;
+    ch.choice_tx = None;
+    ch.continue_tx = None;
+    ch.choice_allow_free = false;
+    drop(ch);
+
+    service
+        .script_manager
+        .is_running
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    service.game_status.lock().await.script_status = None;
+    Ok(())
+}

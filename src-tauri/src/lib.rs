@@ -677,6 +677,7 @@ pub fn run() {
             api::script::script_submit_choice,
             api::script::script_event_continue,
             api::script::update_player_read_position,
+            api::script::stop_script,
             // ── 剧本编辑器 ──
             api::script_editor::editor_get_schema,
             api::script_editor::editor_list_scripts,

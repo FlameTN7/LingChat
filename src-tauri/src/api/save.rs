@@ -5,6 +5,7 @@ use crate::ai_service::game_system::game_status::GameStatusSnapshot;
 use crate::api::game::build_web_init_data;
 use crate::api::game::WebInitData;
 use crate::config::AppConfig;
+use crate::db::entities::line::LineAttribute;
 use crate::db::managers::role_repo::RoleRepo;
 use crate::db::managers::save_repo::SaveRepo;
 use crate::utils::prompt::PromptOptions;
@@ -276,6 +277,16 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
     let snapshot: GameStatusSnapshot = serde_json::from_str(&save_model.status).unwrap_or_default();
     service.game_status.lock().await.apply_snapshot(&snapshot);
 
+    // 7.5 多人物剧本：预加载在场角色（含剧本 NPC），保证读档后立绘/角色名立即可用。
+    //     role_manager.get_loaded 只对已加载角色返回（build_web_init_data 的 onstage_roles
+    //     依赖它）；NPC 若暂无记忆不会被第 8 步 restore_memory_banks 自动 get_role，会漏掉。
+    {
+        let onstage_ids = service.game_status.lock().await.onstage_role_ids.clone();
+        for rid in onstage_ids {
+            let _ = service.game_status.lock().await.get_role(db, rid).await;
+        }
+    }
+
     // 8. 恢复 MemoryBank
     let _ = service
         .restore_memory_banks(save_id)
@@ -428,10 +439,12 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
                 script.current_event_process = restore_seq;
 
                 // 读档续跑：若恢复位置来自「玩家阅读位置」且指向「AI 对话」事件，
-                // 说明玩家已看过该事件的回复（前端只在内容展示时上报位置）。
-                // 前进一位跳过它，避免读档后重新调用 LLM 生成——那会带来数秒延迟、
-                // 回复内容变化，且网络失败会直接中断整个剧本（玩家被踢回自由对话）。
-                // 仅玩家阅读位置触发跳过：引擎位置代表「正在执行/可能尚未看到」，不跳过。
+                // **仅当**该事件的回复已完整生成（line_list 末尾是 assistant 行——
+                // add_assistant_line 在回复最后一句 is_final 时写入）才前进一位跳过：
+                // 此时玩家已看完全部回复，跳过不会跳剧情，且避免读档后重新调用 LLM
+                // （数秒延迟、内容变化、网络失败中断剧本）。
+                // 若回复未生成完（玩家读到一半就存档），则**不跳过**、正常重放重新生成
+                // ——宁可重放也绝不跳剧情（这是 issue 的初衷）。
                 if from_player_read {
                     let chapter_path = if restore_chapter.ends_with(".yaml") {
                         script.script_path.join("Chapters").join(&restore_chapter)
@@ -452,11 +465,27 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
                                     if ev.get("type").and_then(|v| v.as_str())
                                         == Some("ai_dialogue")
                                     {
-                                        script.current_event_process += 1;
-                                        tracing::info!(
-                                            "[LoadSave] 恢复位置指向已展示的 AI 对话事件（#{}），前进一位跳过，不重新调用 LLM",
-                                            restore_seq
-                                        );
+                                        let reply_complete = {
+                                            let gs = service.game_status.lock().await;
+                                            gs.line_list.last().map_or(false, |l| {
+                                                matches!(
+                                                    l.attribute(),
+                                                    LineAttribute::Assistant
+                                                )
+                                            })
+                                        };
+                                        if reply_complete {
+                                            script.current_event_process += 1;
+                                            tracing::info!(
+                                                "[LoadSave] 恢复位置指向已完整生成的 AI 对话事件（#{}），前进一位跳过，不重新调用 LLM",
+                                                restore_seq
+                                            );
+                                        } else {
+                                            tracing::info!(
+                                                "[LoadSave] 恢复位置指向 AI 对话事件（#{}）但回复未生成完，正常重放重新生成（不跳剧情）",
+                                                restore_seq
+                                            );
+                                        }
                                     }
                                 }
                             }

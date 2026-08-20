@@ -104,6 +104,10 @@ setGameMessages(this: GameState, messages: GameMessage[]) {
     this.pendingChapter = ''
     this.displayedSeq = 0
     this.displayedChapter = ''
+    // 通知后端中止剧本任务：AI 对话失败会持续重试，若不中止后台任务
+    // （is_running 仍 true）会导致无法再次启动剧本。正常结束/读档等场景
+    // 任务已停，此调用为空操作。fire-and-forget，不阻塞 UI。
+    invoke('stop_script').catch((e) => console.warn('stop_script 失败:', e))
   },
 
   // 设置当前场景（仅更新 store，不调用 API）

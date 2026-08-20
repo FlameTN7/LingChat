@@ -112,32 +112,25 @@ impl ScriptEvent for AIDialogueEvent {
 
         let generator = MessageGenerator::new(deps);
 
-        // LLM 调用失败（网络抖动/服务瞬时错误）时重试，避免一次失败就中断整个剧本
-        // （run_to_completion 会把玩家踢回自由对话）。上限 3 次、间隔递增；持续失败
-        // 才向上抛错，由 run_to_completion 统一收尾。LLM 未配置在更早处已拦截，不在此重试。
-        let mut last_err: Option<anyhow::Error> = None;
-        for attempt in 0..3 {
+        // LLM 调用失败**绝不终止剧本**（玩家玩到一半不能被踢出）：
+        // 持续重试直到成功，退避间隔递增（上限 8 秒）。瞬时网络抖动秒级恢复；
+        // 长故障时玩家可自行退出剧本（退出会 abort 本任务，on_script_end 收尾）。
+        // LLM 未配置在更早处已拦截，不在此重试。
+        let mut attempt: u64 = 0;
+        loop {
             match generator.process_message(None).await {
-                Ok(_) => {
-                    last_err = None;
-                    break;
-                }
+                Ok(_) => break,
                 Err(e) => {
-                    last_err = Some(e);
+                    attempt += 1;
                     tracing::warn!(
-                        "[AIDialogueEvent] LLM 生成失败（第 {}/3 次），退避后重试: {}",
-                        attempt + 1,
-                        last_err.as_ref().expect("last_err 已赋值")
+                        "[AIDialogueEvent] LLM 生成失败（第 {} 次重试，持续重试不终止剧本）: {}",
+                        attempt,
+                        e
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        500 * (attempt as u64 + 1),
-                    ))
-                    .await;
+                    let wait_ms = 500u64.saturating_mul(attempt.min(16));
+                    tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
                 }
             }
-        }
-        if let Some(e) = last_err {
-            return Err(e);
         }
 
         tracing::info!("[AIDialogueEvent] 执行完毕");
