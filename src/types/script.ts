@@ -148,6 +148,13 @@ export interface ScriptProgressEvent extends ScriptEvent {
   seq: number
 }
 
+/** LLM 生成失败、等待玩家点击「继续」重试（script:llm-retry）。 */
+export interface ScriptRetryEvent extends ScriptEvent {
+  type: 'retry'
+  /** 展示给玩家的提示文案 */
+  message?: string
+}
+
 export type ScriptEventType =
   | ScriptNarrationEvent
   | ScriptDialogueEvent
@@ -168,3 +175,4 @@ export type ScriptEventType =
   | ScriptPresentPicEvent
   | ScriptFreeDialogueEvent
   | ScriptProgressEvent
+  | ScriptRetryEvent

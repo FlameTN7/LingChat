@@ -28,6 +28,8 @@ pub mod event_names {
     /// 事件进度广播：每实际执行一个事件，把（章节 key + 事件序号）推给前端，
     /// 前端据此记录「玩家阅读位置」，读档按玩家位置续跑（而非引擎执行位置）。
     pub const SCRIPT_PROGRESS: &str = "script:progress";
+    /// LLM 生成失败、等待玩家「继续」重试（AI 对话事件在自动重试耗尽后广播）。
+    pub const SCRIPT_LLM_RETRY: &str = "script:llm-retry";
 }
 
 // ============================================================
@@ -205,4 +207,14 @@ pub struct ScriptEndPayload {
     /// reaching its end. The frontend must not credit the player with an
     /// adventure completion in that case.
     pub completed: bool,
+}
+
+/// LLM 生成失败、等待玩家点击「继续」重试（script:llm-retry）。
+/// 前端收到后显示提示文本并进入「等待继续」状态；玩家点击继续经
+/// `script_event_continue` 回执到 continue_tx，引擎据此重新调用 LLM。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmRetryPayload {
+    /// 展示给玩家的提示文案（如「AI 响应失败，点击继续重试」）
+    pub message: String,
 }

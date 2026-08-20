@@ -6,9 +6,13 @@ use serde_json::Value;
 use tauri::Manager;
 
 use crate::ai_service::game_system::script_engine::events::{
-    parse_duration, register_event, ScriptContext, ScriptEvent,
+    parse_duration, register_event, wait_for_frontend_continue, ScriptContext, ScriptEvent,
+};
+use crate::ai_service::game_system::script_engine::responses::{
+    event_names::SCRIPT_LLM_RETRY, LlmRetryPayload,
 };
 use crate::ai_service::game_system::script_engine::utils::script_function;
+use crate::ai_service::message_system::events::emit;
 use crate::ai_service::message_system::generator::{
     GeneratorDeps, GeneratorSource, MessageGenerator,
 };
@@ -112,10 +116,15 @@ impl ScriptEvent for AIDialogueEvent {
 
         let generator = MessageGenerator::new(deps);
 
-        // LLM 调用失败**绝不终止剧本**（玩家玩到一半不能被踢出）：
-        // 持续重试直到成功，退避间隔递增（上限 8 秒）。瞬时网络抖动秒级恢复；
-        // 长故障时玩家可自行退出剧本（退出会 abort 本任务，on_script_end 收尾）。
-        // LLM 未配置在更早处已拦截，不在此重试。
+        // LLM 调用失败**绝不踢出玩家**（剧本连续性优先，不跳过对话、不退出剧本）：
+        // 1) 先自动重试 3 次（退避约 1s/2s/3s，覆盖瞬时网络抖动）；
+        // 2) 仍失败则广播「重试」提示并等待玩家点击「继续」——玩家点继续经
+        //    `script_event_continue` 回执到 continue_tx（与旁白共用等待通道，
+        //    引擎顺序执行无冲突），此后重置自动重试计数再来一轮；
+        // 3) 玩家不想等可退出剧本：stop_script abort 本任务即终止。
+        // 重试回溯点正确性：失败时 process_next_event 未返回（进度仍停在当前
+        // ai_dialogue）、add_assistant_line 未执行（line_list 无残留），重新生成
+        // 的上下文与首次一致。
         let mut attempt: u64 = 0;
         loop {
             match generator.process_message(None).await {
@@ -123,12 +132,28 @@ impl ScriptEvent for AIDialogueEvent {
                 Err(e) => {
                     attempt += 1;
                     tracing::warn!(
-                        "[AIDialogueEvent] LLM 生成失败（第 {} 次重试，持续重试不终止剧本）: {}",
+                        "[AIDialogueEvent] LLM 生成失败（第 {} 次重试）: {}",
                         attempt,
                         e
                     );
-                    let wait_ms = 500u64.saturating_mul(attempt.min(16));
-                    tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                    if attempt > 3 {
+                        // 自动重试耗尽：交还玩家控制
+                        let _ = emit(
+                            ctx.app,
+                            SCRIPT_LLM_RETRY,
+                            &LlmRetryPayload {
+                                message: format!(
+                                    "AI 响应失败（已尝试 {} 次），点击「继续」重试",
+                                    attempt
+                                ),
+                            },
+                        );
+                        wait_for_frontend_continue(&ctx.channels).await;
+                        attempt = 0;
+                        continue;
+                    }
+                    // 自动重试退避（约 1s/2s/3s）
+                    tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
                 }
             }
         }

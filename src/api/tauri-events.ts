@@ -368,6 +368,18 @@ export function initializeTauriEventListeners() {
     } as ScriptEventType)
   })
 
+  // LLM 生成失败、等待玩家点击「继续」重试（AI 对话自动重试耗尽后广播）。
+  // 入队消费：玩家点击继续 → continue() 里的 script_event_continue 回执给引擎。
+  listen('script:llm-retry', (event) => {
+    const p = event.payload as { message?: string }
+    console.log('[Tauri] script:llm-retry', event.payload)
+    eventQueue.addEvent({
+      type: 'retry',
+      duration: 0,
+      message: p.message ?? '',
+    } as ScriptEventType)
+  })
+
   // === God Agent multi-dialogue event ===
 
   listen('character:switch', async (event) => {
