@@ -36,7 +36,11 @@ use tokio::sync::Mutex;
 
 use crate::ai_service::config::AIServiceConfig;
 use crate::ai_service::game_system::game_status::GameStatus;
+use crate::ai_service::game_system::script_engine::responses::{
+    event_names::SCRIPT_LLM_RETRY, LlmRetryPayload,
+};
 use crate::ai_service::llm::LlmClient;
+use crate::ai_service::message_system::events::emit;
 
 // ============================================================
 // 剧本共享通道（剧本运行期间的用户输入/选择）
@@ -87,6 +91,55 @@ pub async fn wait_for_frontend_continue(channels: &SharedScriptChannels) {
 }
 
 pub type SharedScriptChannels = Arc<Mutex<ScriptChannels>>;
+
+/// 带 LLM 失败重试的剧本内 AI 生成（供 ai_dialogue / free_dialogue 复用）。
+///
+/// 玩家**绝不会因 LLM 调用失败被踢出剧本**（剧本连续性优先，不跳过对话、不退出）：
+/// 1) 自动重试 3 次（退避约 1s/2s/3s，覆盖瞬时网络抖动）；
+/// 2) 仍失败则广播 `script:llm-retry` 并等待玩家点击「继续」——玩家点继续经
+///    `script_event_continue` 回执到 continue_tx（与旁白共用等待通道，顺序执行无冲突），
+///    此后重置自动重试计数再来一轮；
+/// 3) 玩家不想等可退出剧本：stop_script abort 本任务即终止。
+///
+/// 重试回溯点正确：失败时调用方的事件进度未前进、`add_assistant_line` 未执行
+/// （line_list 无残留），重新生成的 LLM 上下文与首次一致。
+pub async fn generate_with_retry(
+    ctx: &mut ScriptContext<'_>,
+    generator: &crate::ai_service::message_system::generator::MessageGenerator,
+) -> Result<()> {
+    let mut attempt: u64 = 0;
+    loop {
+        match generator.process_message(None).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                attempt += 1;
+                tracing::warn!(
+                    "[ScriptEngine] LLM 生成失败（第 {} 次重试）: {}",
+                    attempt,
+                    e
+                );
+                if attempt > 3 {
+                    // 自动重试耗尽：交还玩家控制
+                    let _ = emit(
+                        ctx.app,
+                        SCRIPT_LLM_RETRY,
+                        &LlmRetryPayload {
+                            message: format!(
+                                "AI 响应失败（已尝试 {} 次），点击「继续」重试",
+                                attempt
+                            ),
+                        },
+                    );
+                    wait_for_frontend_continue(&ctx.channels).await;
+                    attempt = 0;
+                    continue;
+                }
+                // 自动重试退避（约 1s/2s/3s）
+                tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+            }
+        }
+    }
+}
 
 // ============================================================
 // ScriptContext —— 事件处理器所需的依赖打包

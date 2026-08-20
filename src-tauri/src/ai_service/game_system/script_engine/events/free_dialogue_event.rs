@@ -8,7 +8,7 @@ use serde_json::Value;
 use tauri::Manager;
 
 use crate::ai_service::game_system::script_engine::events::{
-    parse_duration, register_event, ScriptContext, ScriptEvent,
+    generate_with_retry, parse_duration, register_event, ScriptContext, ScriptEvent,
 };
 use crate::ai_service::game_system::script_engine::responses::{
     event_names::{SCRIPT_FREE_DIALOGUE, SCRIPT_INPUT},
@@ -91,6 +91,20 @@ impl ScriptEvent for FreeDialogueEvent {
             .clone()
             .ok_or_else(|| anyhow!("ScriptStatus 未设置"))?;
 
+        // 读档续跑续轮：free_dialogue 是多轮块，rounds 是局部变量不保存会导致
+        // 块中存档读档后整块重放（轮次重置 + 每轮重调 LLM + 历史重复）。
+        // 把「已完成的轮次」写进 script_status.vars（key 带事件索引，避免多个
+        // free_dialogue 互相覆盖；__ 前缀是内部约定，不参与剧本作者的条件判断）。
+        // 每轮 LLM 回复完成后写回，因此：
+        //  - 玩家在「本轮 input 已显示但未输入」时存档 → vars 仍是上一轮值 → 续跑重新进入本轮；
+        //  - 玩家在「本轮回复后」存档 → vars 已是本轮值 → 续跑从下一轮继续。
+        let round_key = format!("__free_dialogue_rounds_{}", script_status.current_event_process);
+        let saved_rounds = script_status
+            .vars
+            .get(&round_key)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+
         let role_id = {
             let mut gs = ctx.game_status.lock().await;
             let role = script_function::get_role(&mut *gs, ctx.db, &script_status, &self.character)
@@ -145,8 +159,8 @@ impl ScriptEvent for FreeDialogueEvent {
         let end_prompt = replace_placeholder(&self.end_prompt, &game_status_guard);
         drop(game_status_guard); // 尽早释放锁
 
-        // ---- 主循环（支持无限轮次） ----
-        let mut rounds: i32 = 0;
+        // ---- 主循环（支持无限轮次；读档续跑时从已进行轮次继续） ----
+        let mut rounds: i32 = saved_rounds;
         loop {
             let mut is_last_round = false;
 
@@ -222,8 +236,17 @@ impl ScriptEvent for FreeDialogueEvent {
                     .await?;
             }
 
-            // ---- 调用 AI 生成回复 ----
-            generator.process_message(None).await?;
+            // ---- 调用 AI 生成回复（失败不踢出：自动重试 3 次后等玩家点「继续」重试） ----
+            generate_with_retry(ctx, &generator).await?;
+
+            // 本轮完成：把轮次写回 vars，读档续跑据此从下一轮继续
+            // （存档在「本轮 input 已显示但未输入」时，vars 仍是上一轮值 → 续跑重新进入本轮）
+            {
+                let mut gs = ctx.game_status.lock().await;
+                if let Some(ref mut ss) = gs.script_status {
+                    ss.vars.insert(round_key.clone(), serde_json::json!(rounds));
+                }
+            }
 
             if is_last_round {
                 break;
