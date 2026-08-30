@@ -593,7 +593,7 @@ pub(crate) async fn build_web_init_data(
 
     // 加载全局玩家档案（解耦玩家与 AI 设定）
     let player_profile = {
-        match PlayerProfileRepo::get_profile(db).await {
+        match PlayerProfileRepo::get_profile(&service.db).await {
             Ok(profile) => PlayerProfileInit {
                 user_name: profile.user_name,
                 user_subtitle: profile.user_subtitle.unwrap_or_default(),
