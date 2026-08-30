@@ -307,6 +307,10 @@ export default {
         "ENABLE_SCHEDULE_REMINDER — Enable schedule reminders with popup time announcements",
       ENABLE_IMPORTANT_DAY_REMINDER:
         "ENABLE_IMPORTANT_DAY_REMINDER — Enable heartwarming reminders for holidays and special days",
+      display: {
+        disable_splash_animation:
+          "DISABLE_SPLASH_ANIMATION — Disable the first-launch splash animation (cat paw loading animation)",
+      },
     },
   },
   workshop: {
@@ -391,7 +395,7 @@ export default {
     fields: {
       aiName: "AI Name",
       aiSubtitle: "AI Subtitle",
-      userName: "User Name",
+      xUser Name",
       userSubtitle: "User Subtitle",
       title: "Character Title",
       info: "Character Bio",
@@ -529,7 +533,7 @@ export default {
       aiNamePlaceholder: "Name used in conversations",
       aiSubtitle: "AI Subtitle",
       aiSubtitlePlaceholder: "e.g. Night Watcher / School Idol",
-      userName: "User Name",
+      xUser Name",
       userSubtitle: "User Subtitle",
       info: "Character Bio",
       infoPlaceholder: "Optional: shown in the character introduction",

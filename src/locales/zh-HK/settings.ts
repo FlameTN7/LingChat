@@ -281,6 +281,10 @@ export default {
       ENABLE_SCHEDULE_REMINDER: "ENABLE_SCHEDULE_REMINDER — 啟用強日程報時彈窗提醒",
       ENABLE_IMPORTANT_DAY_REMINDER:
         "ENABLE_IMPORTANT_DAY_REMINDER — 啟用重要節日同特別日子嘅暖心提醒",
+      display: {
+        disable_splash_animation:
+          "DISABLE_SPLASH_ANIMATION — 關閉首次啟動嘅開屏動畫（貓爪加載動畫）",
+      },
     },
   },
   workshop: {

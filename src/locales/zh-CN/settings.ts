@@ -395,7 +395,7 @@ export default {
     fields: {
       aiName: "AI 名称",
       aiSubtitle: "AI 副标题",
-      userName: "用户名称",
+      x用户名称",
       userSubtitle: "用户副标题",
       title: "角色标题",
       info: "角色介绍",
@@ -533,7 +533,7 @@ export default {
       aiNamePlaceholder: "角色对话名称",
       aiSubtitle: "AI 副标题",
       aiSubtitlePlaceholder: "例如: 守夜人 / 学园偶像",
-      userName: "用户名称",
+      x用户名称",
       userSubtitle: "用户副标题",
       info: "角色简介",
       infoPlaceholder: "可选：用于角色介绍展示",
