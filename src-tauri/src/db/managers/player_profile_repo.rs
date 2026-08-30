@@ -124,17 +124,24 @@ impl PlayerProfileRepo {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("创建玩家目录失败: {:?}", dir))?;
 
-        // 复用 CharacterSettings 序列化，保证与角色 settings.yml 同构（仅写入玩家相关字段）。
-        let settings = CharacterSettings {
-            user_name: profile.user_name.clone(),
-            user_subtitle: profile.user_subtitle.clone(),
-            system_prompt: profile.user_prompt.clone(),
-            info: profile.info.clone(),
-            system_prompt_example: profile.system_prompt_example.clone(),
-            ..Default::default()
-        };
+        // 复用 CharacterSettings 的相关字段，但只序列化玩家关心的键，
+        // 避免把 ai_name/scale 等 AI 角色默认值混入玩家 settings.yml。
+        let mut obj = serde_json::Map::new();
+        obj.insert("user_name".to_string(), serde_json::json!(profile.user_name));
+        if let Some(s) = profile.user_subtitle.as_deref().filter(|s| !s.is_empty()) {
+            obj.insert("user_subtitle".to_string(), serde_json::json!(s));
+        }
+        if let Some(s) = profile.user_prompt.as_deref().filter(|s| !s.is_empty()) {
+            obj.insert("system_prompt".to_string(), serde_json::json!(s));
+        }
+        if let Some(s) = profile.info.as_deref().filter(|s| !s.is_empty()) {
+            obj.insert("info".to_string(), serde_json::json!(s));
+        }
+        if let Some(s) = profile.system_prompt_example.as_deref().filter(|s| !s.is_empty()) {
+            obj.insert("system_prompt_example".to_string(), serde_json::json!(s));
+        }
 
-        let yaml = serde_yaml::to_string(&settings)
+        let yaml = serde_yaml::to_string(&obj)
             .context("序列化玩家档案失败")?;
         let path = Self::settings_path();
         std::fs::write(&path, yaml)
