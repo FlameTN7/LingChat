@@ -1,5 +1,8 @@
 <template>
   <MenuPage>
+    <!-- 玩家档案（解耦玩家与 AI 设定） -->
+    <SettingsPlayerProfile />
+
     <MenuItem :title="$t('settings.character.list.title')">
       <template #header>
         <Rabbit :size="20" />
@@ -120,6 +123,7 @@
   import CharacterCard from "../../ui/Menu/CharacterCard.vue";
   import { Button } from "../../base";
   import { MenuItem, MenuPage } from "../../ui";
+  import SettingsPlayerProfile from "./SettingsPlayerProfile.vue";
   import { characterGetAll } from "../../../api/services/character";
   import { useRoleImportExport } from "../../../composables/useRoleImportExport";
   import type { ConflictPolicy } from "../../../api/services/role-archive";
