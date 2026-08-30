@@ -70,6 +70,10 @@ export default {
       userNamePlaceholder: "輸入玩家名稱",
       userSubtitle: "玩家副標題",
       userSubtitlePlaceholder: "輸入玩家副標題",
+      userPrompt: "玩家設定/介紹",
+      userPromptPlaceholder: "例如：佢叫阿黎，性格溫柔但有點毒舌，鍾意烘焙同貓。",
+      userPromptHint:
+        "話畀 AI 知屏幕對面嘅你係咩人（身份/性格/喜好等），可以幫 AI 更貼合你咁回應。",
       save: "保存玩家檔案",
       saved: "玩家檔案已保存",
     },

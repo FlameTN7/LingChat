@@ -39,6 +39,9 @@ pub struct AIService {
     pub ai_subtitle: Option<String>,
     pub user_name: String,
     pub user_subtitle: Option<String>,
+    /// 玩家设定/介绍（全局 player_profile 表的 user_prompt 字段）。
+    /// 解耦玩家与 AI 后，把它注入系统提示词，让 AI 了解屏幕对面用户的身份与性格。
+    pub player_prompt: String,
     pub ai_prompt: String,
     pub ai_prompt_example: Option<String>,
     pub ai_prompt_example_old: Option<String>,
@@ -87,6 +90,7 @@ impl AIService {
             ai_subtitle: None,
             user_name: String::new(),
             user_subtitle: None,
+            player_prompt: String::new(),
             ai_prompt: String::new(),
             ai_prompt_example: None,
             ai_prompt_example_old: None,
@@ -122,25 +126,32 @@ impl AIService {
         self.clothes_name = settings.clothes_name.clone(); // TODO: 这个是冗余的，之后可以去掉
 
         // 玩家身份从全局 player_profile 表加载（解耦：不再从角色 settings.yml 读取）
-        let (user_name, user_subtitle) = {
+        let (user_name, user_subtitle, user_prompt) = {
             match crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(&self.db)
                 .await
             {
                 Ok(profile) => {
                     let uname = profile.user_name;
                     let usub = profile.user_subtitle.unwrap_or_default();
-                    (uname, usub)
+                    let uprompt = profile.user_prompt.unwrap_or_default();
+                    (uname, usub, uprompt)
                 }
                 Err(e) => {
                     tracing::warn!("读取玩家档案失败，回退到角色设置: {e}");
                     // 回退到旧行为：从 CharacterSettings 读（兼容老版本数据）
-                    (settings.user_name.clone(), settings.user_subtitle.clone().unwrap_or_default())
+                    (
+                        settings.user_name.clone(),
+                        settings.user_subtitle.clone().unwrap_or_default(),
+                        String::new(),
+                    )
                 }
             }
         };
 
         self.user_name = user_name.clone();
         self.user_subtitle = if user_subtitle.is_empty() { None } else { Some(user_subtitle.clone()) };
+        // 玩家设定/介绍也存到 AIService，供后续注入系统提示词
+        self.player_prompt = user_prompt.clone();
 
         self.ai_prompt = sys_prompt_builder(
             &self.user_name,
@@ -149,12 +160,14 @@ impl AIService {
             self.ai_prompt_example.as_deref(),
             self.ai_prompt_example_old.as_deref(),
             prompt_options,
+            &user_prompt,
         );
 
         {
             let mut gs = self.game_status.lock().await;
             gs.player.user_name = self.user_name.clone();
             gs.player.user_subtitle = self.user_subtitle.clone().unwrap_or_default();
+            gs.player.user_prompt = user_prompt;
         }
 
         self.settings = Some(settings);

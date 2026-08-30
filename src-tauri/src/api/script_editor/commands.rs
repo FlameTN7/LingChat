@@ -1730,11 +1730,17 @@ async fn build_main_role_prompt(
     // 与正式游玩走的是同一条构建路径（玩家名从全局 player_profile 读取）
     Some(MainRolePrompt {
         text: {
-            let player_name =
-                crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(db)
-                    .await
-                    .map(|p| p.user_name)
-                    .unwrap_or_default();
+            let profile = crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(db)
+                .await
+                .unwrap_or(crate::db::entities::player_profile::Model {
+                    id: 1,
+                    user_name: "玩家".to_string(),
+                    user_subtitle: None,
+                    user_prompt: None,
+                    updated_at: None,
+                });
+            let player_name = profile.user_name;
+            let player_prompt = profile.user_prompt.unwrap_or_default();
             sys_prompt_builder_by_settings(
                 &settings,
                 Some(&player_name),
@@ -1742,6 +1748,7 @@ async fn build_main_role_prompt(
                     output_sec_lang: true,
                     no_emotion_limit: true,
                 },
+                &player_prompt,
             )
         },
         name: settings.ai_name,

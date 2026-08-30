@@ -24,6 +24,16 @@
           />
         </div>
       </div>
+      <div class="space-y-1.5">
+        <label class="text-xs text-white/60 font-medium">{{ $t('settings.playerProfile.userPrompt') }}</label>
+        <textarea
+          v-model="localProfile.user_prompt"
+          rows="4"
+          :placeholder="$t('settings.playerProfile.userPromptPlaceholder')"
+          class="w-full rounded-xl bg-white/10 border border-white/20 px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-300/70 transition resize-none leading-[1.7]"
+        ></textarea>
+        <p class="text-[0.68rem] text-white/40 leading-[1.6]">{{ $t('settings.playerProfile.userPromptHint') }}</p>
+      </div>
       <div class="flex justify-end gap-2">
         <Button type="big" :disabled="saving" @click="handleSave">
           {{ $t('settings.playerProfile.save') }}

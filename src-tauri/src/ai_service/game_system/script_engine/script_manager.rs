@@ -430,6 +430,7 @@ impl ScriptManager {
                     settings.system_prompt_example.as_deref(),
                     settings.system_prompt_example_old.as_deref(),
                     prompt_options,
+                    &ctx.game_status.lock().await.player.user_prompt,
                 );
                 let sys_line = LineBase {
                     content: ai_prompt,

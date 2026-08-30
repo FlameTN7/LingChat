@@ -177,6 +177,10 @@ fn build_framing_prefix_cn(user_name: &str, character_name: &str) -> String {
 }
 
 /// 构建系统提示词。与 Python `Function.sys_prompt_builder` 语义一致。
+///
+/// `player_prompt` 是全局玩家档案里的"玩家设定/介绍"（解耦玩家与 AI 后，
+/// 由 player_profile 表提供）。非空时追加到系统提示词末尾，让 AI 了解
+/// 屏幕对面用户的真实身份与性格设定；为空则不影响原有行为。
 pub fn sys_prompt_builder(
     user_name: &str,
     character_name: &str,
@@ -184,12 +188,27 @@ pub fn sys_prompt_builder(
     ai_prompt_example: Option<&str>,
     ai_prompt_example_old: Option<&str>,
     options: PromptOptions,
+    player_prompt: &str,
 ) -> String {
     let emotion_head = DIALOG_FORMAT_PROMPT_2_EMOTION_LIMIT_HEAD;
 
     let example_cn = ai_prompt_example.filter(|s| !s.is_empty());
     let example_jp = ai_prompt_example_old.filter(|s| !s.is_empty());
     let framing = build_framing_prefix_cn(user_name, character_name);
+
+    // 玩家设定追加段：非空时放入，告知 AI 真实用户的身份与性格设定。
+    // 铁律：AI 不能替用户说话、不能替用户做决定，只可据此调整对待用户的方式。
+    fn append_player_prompt(out: &mut String, player_prompt: &str) {
+        if !player_prompt.is_empty() {
+            out.push_str("\n\n【了解屏幕对面的人】\n");
+            out.push_str(player_prompt);
+            out.push_str(
+                "\n（以上是屏幕对面真实用户的身份与性格设定，不是你说的内容。\
+                 请根据这些设定选择合适的方式对待用户，但绝不能替用户说话、替用户做决定，\
+                 用户没说过的话不要替用户说出来。）",
+            );
+        }
+    }
 
     if !options.output_sec_lang {
         // 中文模式
@@ -215,6 +234,7 @@ pub fn sys_prompt_builder(
         out.push_str(&example);
         out.push_str(emotion_head);
         out.push_str(DIALOG_FORMAT_PROMPT_2_BODY);
+        append_player_prompt(&mut out, player_prompt);
         out
     } else {
         // 中日双语模式
@@ -236,6 +256,7 @@ pub fn sys_prompt_builder(
         out.push_str(&example);
         out.push_str(emotion_head);
         out.push_str(DIALOG_FORMAT_PROMPT_2_BODY);
+        append_player_prompt(&mut out, player_prompt);
         out
     }
 }
@@ -243,12 +264,14 @@ pub fn sys_prompt_builder(
 /// 便捷包装：直接从 `CharacterSettings` 构建。
 /// `player_name` 解耦玩家与 AI：调用方从全局 player_profile 传入玩家名；
 /// 传 None 时回退 settings.user_name（兼容旧数据）。
+/// `player_prompt` 是全局玩家档案的"玩家设定/介绍"，非空时注入系统提示词。
 /// TODO: 这个似乎是给老角色用的，暂时用 allow_dead_code 标记
 #[allow(dead_code)]
 pub fn sys_prompt_builder_by_settings(
     settings: &CharacterSettings,
     player_name: Option<&str>,
     options: PromptOptions,
+    player_prompt: &str,
 ) -> String {
     let default_prompt =
         "你的信息被设置错误了，请你在接下来的对话中提示用户检查配置信息".to_string();
@@ -261,6 +284,7 @@ pub fn sys_prompt_builder_by_settings(
         settings.system_prompt_example.as_deref(),
         settings.system_prompt_example_old.as_deref(),
         options,
+        player_prompt,
     )
 }
 
