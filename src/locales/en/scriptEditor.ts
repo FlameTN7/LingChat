@@ -254,6 +254,9 @@ export default {
     },
   },
   characters: {
+    playerSection: "Player Profile",
+    playerHint:
+      "Default player identity when running the script (can be temporarily overridden by 'Set Player Identity' events)",
     menuTitle: "Script characters",
     empty: "No script characters yet \u2014 create one below or import from the global library",
     noLocalAvatar:
