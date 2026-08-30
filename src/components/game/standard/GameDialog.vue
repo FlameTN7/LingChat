@@ -882,6 +882,7 @@
 
     gameStore.appendGameMessage({
       type: "message",
+      messageType: "player",
       displayName: gameStore.userName,
       content: text,
     });
