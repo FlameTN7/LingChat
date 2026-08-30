@@ -31,6 +31,12 @@ pub struct PlayerProfileInit {
     pub user_name: String,
     pub user_subtitle: String,
     pub user_prompt: String,
+    /// 简介 / 一句话人设
+    pub info: String,
+    /// 说话风格示例
+    pub system_prompt_example: String,
+    /// 玩家头像绝对路径（经 convertFileSrc 访问）
+    pub avatar_path: Option<String>,
 }
 
 /// 对应前端 `WebInitData`（`src/api/services/game-info.ts`）
@@ -598,6 +604,10 @@ pub(crate) async fn build_web_init_data(
                 user_name: profile.user_name,
                 user_subtitle: profile.user_subtitle.unwrap_or_default(),
                 user_prompt: profile.user_prompt.unwrap_or_default(),
+                info: profile.info.unwrap_or_default(),
+                system_prompt_example: profile.system_prompt_example.unwrap_or_default(),
+                avatar_path: PlayerProfileRepo::avatar_abs_path()
+                    .map(|p| p.to_string_lossy().into_owned()),
             },
             Err(e) => {
                 tracing::warn!("读取玩家档案失败: {e}");
@@ -605,6 +615,9 @@ pub(crate) async fn build_web_init_data(
                     user_name: "玩家".to_string(),
                     user_subtitle: String::new(),
                     user_prompt: String::new(),
+                    info: String::new(),
+                    system_prompt_example: String::new(),
+                    avatar_path: None,
                 }
             }
         }
@@ -681,7 +694,7 @@ pub async fn add_role_to_scene(app: AppHandle, role_id: i32) -> Result<JsonValue
             .clone()
             .unwrap_or_else(|| format!("角色{}", role_id));
 
-        // 构建角色的 system prompt（玩家名/设定从全局 player_profile 读取，解耦玩家与 AI）
+        // 构建角色的 system prompt（玩家名/设定块从全局 player_profile 读取，解耦玩家与 AI）
         let player_name = gs.player.user_name.clone();
         let player_prompt = gs.player.user_prompt.clone();
         let system_prompt = sys_prompt_builder_by_settings(

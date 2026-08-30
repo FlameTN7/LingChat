@@ -764,6 +764,7 @@ pub fn run() {
             // ── 玩家档案（解耦玩家与 AI）──
             api::player::get_player_profile,
             api::player::set_player_profile,
+            api::player::save_player_avatar,
             api::screenshot::start_screenshot,
             api::screenshot::get_overlay_data,
             api::screenshot::confirm_screenshot,

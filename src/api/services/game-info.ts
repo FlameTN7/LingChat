@@ -49,6 +49,12 @@ export interface PlayerProfile {
   user_name: string
   user_subtitle: string
   user_prompt: string
+  /** 简介 / 一句话人设 */
+  info: string
+  /** 说话风格示例 */
+  system_prompt_example: string
+  /** 玩家头像绝对路径（经 convertFileSrc 访问） */
+  avatar_path?: string | null
 }
 
 export interface WebInitData {

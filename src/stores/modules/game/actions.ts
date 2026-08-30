@@ -32,6 +32,10 @@ export const actions = {
           user_name: gameInfo.player_profile.user_name || "玩家",
           user_subtitle: gameInfo.player_profile.user_subtitle || "",
           user_prompt: gameInfo.player_profile.user_prompt || "",
+          info: gameInfo.player_profile.info || "",
+          system_prompt_example:
+            gameInfo.player_profile.system_prompt_example || "",
+          avatar_path: gameInfo.player_profile.avatar_path ?? null,
         };
         userStore.profileLoaded = true;
       } else {

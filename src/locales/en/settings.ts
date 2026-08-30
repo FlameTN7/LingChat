@@ -75,19 +75,44 @@ export default {
   },
   character: {
     playerProfile: {
-      title: "Player Profile",
       userName: "Player Name",
-      userNamePlaceholder: "Enter player name",
+      title: "Player Identity Card",
       userSubtitle: "Player Subtitle",
+      userNamePlaceholder: "Enter player name",
       userSubtitlePlaceholder: "Enter player subtitle",
-      userPrompt: "Player Profile / Description",
+      userPrompt: "Persona / Setting",
       userPromptPlaceholder: "e.g. Her name is Ali, gentle but a bit sharp-tongued, likes baking and cats.",
-      userPromptHint: "Tell the AI who you are (identity/personality/preferences) so it can respond more fittingly.",
+      userPromptHint:
+        "Tell the AI who you are (identity/personality/preferences) so it can respond more fittingly.",
+      playerInfo: "Bio / One-line Persona",
+      playerInfoPlaceholder: "Introduce yourself in one line, e.g. An adventurer programmer.",
+      promptExample: "Speaking-style Example",
+      promptExamplePlaceholder:
+        "Optional: give the AI some examples of your speaking style to help it mimic your tone naturally.",
+      noInfo: "No bio yet",
+      edit: "Edit",
+      cancel: "Cancel",
+      saving: "Saving...",
+      modalTitle: "Edit Player Identity Card",
+      modalSubtitle:
+        "Reuses the AI character card editing experience, but keeps only player-identity settings",
       save: "Save Player Profile",
       saved: "Player profile saved",
+      tabs: {
+        basic: "Basic",
+        avatar: "Avatar",
+        prompts: "Settings",
+      },
+      avatar: {
+        label: "Player Avatar",
+        status: "Player Avatar",
+        uploaded: "Selected",
+        notUploaded: "Not selected",
+        dropHint: "Drag an image here or click to select",
+      },
     },
     list: {
-      title: "Character List (switching characters starts a brand-new conversation)",
+      title: "AI Character List (switching characters starts a brand-new conversation)",
       noDesc: "No character description yet",
     },
     openFolder: {

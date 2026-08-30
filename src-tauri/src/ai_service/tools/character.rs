@@ -131,7 +131,7 @@ impl Tool for CharacterSwitch {
                 .get_loaded(role_id)
                 .ok_or_else(|| ToolError::Execution(format!("角色 {role_id} 加载后不可用")))?;
             let name = loaded.display_name.clone().unwrap_or(fallback_role_name);
-            // 玩家名/设定从全局 player_profile 读取（解耦玩家与 AI 设定）
+            // 玩家名/设定块（含简介/人格/示例）从全局 player_profile（文件驱动）读取（解耦玩家与 AI 设定）
             let player_name = gs.player.user_name.clone();
             let player_prompt = gs.player.user_prompt.clone();
             let prompt = sys_prompt_builder_by_settings(

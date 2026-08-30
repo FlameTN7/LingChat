@@ -39,7 +39,7 @@ pub struct AIService {
     pub ai_subtitle: Option<String>,
     pub user_name: String,
     pub user_subtitle: Option<String>,
-    /// 玩家设定/介绍（全局 player_profile 表的 user_prompt 字段）。
+    /// 玩家设定块（简介/人格/示例，全局 player_profile 文件驱动）。
     /// 解耦玩家与 AI 后，把它注入系统提示词，让 AI 了解屏幕对面用户的身份与性格。
     pub player_prompt: String,
     pub ai_prompt: String,
@@ -107,7 +107,7 @@ impl AIService {
     /// 钦灵：TODO，这一段代码是老函数，新版已经不是单一人物，而是多个人物，这部分代码之后需要清理。
     ///
     /// 解耦玩家与 AI：玩家身份不再从 CharacterSettings 中读取，
-    /// 而是从全局 player_profile 表加载（fallback 到 CharacterSettings 以兼容旧数据）。
+    /// 而是从全局 player_profile（文件驱动）加载（fallback 到 CharacterSettings 以兼容旧数据）。
     pub async fn import_settings(
         &mut self,
         settings: CharacterSettings,
@@ -125,15 +125,16 @@ impl AIService {
         self.ai_prompt_example_old = settings.system_prompt_example_old.clone();
         self.clothes_name = settings.clothes_name.clone(); // TODO: 这个是冗余的，之后可以去掉
 
-        // 玩家身份从全局 player_profile 表加载（解耦：不再从角色 settings.yml 读取）
-        let (user_name, user_subtitle, user_prompt) = {
+        // 玩家身份从全局 player_profile（文件驱动）加载（解耦：不再从角色 settings.yml 读取）
+        // 读取整个档案，并把「设定块」（简介/人格/示例）合并注入系统提示词。
+        let (user_name, user_subtitle, player_prompt) = {
             match crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(&self.db)
                 .await
             {
                 Ok(profile) => {
                     let uname = profile.user_name;
                     let usub = profile.user_subtitle.unwrap_or_default();
-                    let uprompt = profile.user_prompt.unwrap_or_default();
+                    let uprompt = profile.to_prompt_fragment();
                     (uname, usub, uprompt)
                 }
                 Err(e) => {
@@ -150,8 +151,8 @@ impl AIService {
 
         self.user_name = user_name.clone();
         self.user_subtitle = if user_subtitle.is_empty() { None } else { Some(user_subtitle.clone()) };
-        // 玩家设定/介绍也存到 AIService，供后续注入系统提示词
-        self.player_prompt = user_prompt.clone();
+        // 玩家设定块（简介/人格/示例）也存到 AIService，供后续注入系统提示词
+        self.player_prompt = player_prompt.clone();
 
         self.ai_prompt = sys_prompt_builder(
             &self.user_name,
@@ -160,14 +161,14 @@ impl AIService {
             self.ai_prompt_example.as_deref(),
             self.ai_prompt_example_old.as_deref(),
             prompt_options,
-            &user_prompt,
+            &player_prompt,
         );
 
         {
             let mut gs = self.game_status.lock().await;
             gs.player.user_name = self.user_name.clone();
             gs.player.user_subtitle = self.user_subtitle.clone().unwrap_or_default();
-            gs.player.user_prompt = user_prompt;
+            gs.player.user_prompt = player_prompt;
         }
 
         self.settings = Some(settings);

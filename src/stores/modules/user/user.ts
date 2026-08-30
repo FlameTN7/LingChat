@@ -1,16 +1,23 @@
 import { defineStore } from "pinia";
-import { getPlayerProfile, setPlayerProfile } from "@/api/services/player";
+import {
+  getPlayerProfile,
+  savePlayerAvatar,
+  setPlayerProfile,
+} from "@/api/services/player";
 import type { PlayerProfile } from "@/api/services/game-info";
 
 export const useUserStore = defineStore("user", {
   state: () => ({
     user_id: "1",
     client_id: "",
-    /** 全局玩家档案（解耦玩家与 AI 设定） */
+    /** 全局玩家档案（解耦玩家与 AI 设定，文件驱动） */
     playerProfile: {
       user_name: "玩家",
       user_subtitle: "",
       user_prompt: "",
+      info: "",
+      system_prompt_example: "",
+      avatar_path: null,
     } as PlayerProfile,
     /** player_profile 是否已加载 */
     profileLoaded: false,
@@ -20,8 +27,14 @@ export const useUserStore = defineStore("user", {
     playerName: (state) => state.playerProfile.user_name,
     /** 玩家副标题 */
     playerSubtitle: (state) => state.playerProfile.user_subtitle,
-    /** 玩家系统提示词 */
+    /** 玩家系统提示词（设定块） */
     playerPrompt: (state) => state.playerProfile.user_prompt,
+    /** 玩家简介 */
+    playerInfo: (state) => state.playerProfile.info,
+    /** 玩家说话风格示例 */
+    playerPromptExample: (state) => state.playerProfile.system_prompt_example,
+    /** 玩家头像路径 */
+    playerAvatar: (state) => state.playerProfile.avatar_path,
   },
   actions: {
     /** 从后端加载玩家档案 */
@@ -32,6 +45,9 @@ export const useUserStore = defineStore("user", {
           user_name: profile.user_name || "玩家",
           user_subtitle: profile.user_subtitle || "",
           user_prompt: profile.user_prompt || "",
+          info: profile.info || "",
+          system_prompt_example: profile.system_prompt_example || "",
+          avatar_path: profile.avatar_path ?? null,
         };
         this.profileLoaded = true;
       } catch (e) {
@@ -50,12 +66,27 @@ export const useUserStore = defineStore("user", {
         await setPlayerProfile(
           this.playerProfile.user_name,
           this.playerProfile.user_subtitle,
-          this.playerProfile.user_prompt
+          this.playerProfile.user_prompt,
+          this.playerProfile.info,
+          this.playerProfile.system_prompt_example
         );
         return true;
       } catch (e) {
         console.error("保存玩家档案失败:", e);
         return false;
+      }
+    },
+
+    /** 保存玩家头像 */
+    async saveAvatar(imageBase64: string, ext?: string) {
+      try {
+        const res = await savePlayerAvatar(imageBase64, ext);
+        this.playerProfile.avatar_path =
+          res.avatar_path || this.playerProfile.avatar_path;
+        return res;
+      } catch (e) {
+        console.error("保存玩家头像失败:", e);
+        throw e;
       }
     },
 

@@ -1582,7 +1582,7 @@ impl PreviewSession {
         gs.present_role_ids.clear();
         gs.onstage_role_ids.clear();
         gs.onstage_role(main_id); // 不做这步立绘不会出现
-        // 玩家名（全局 player_profile 表，解耦玩家与 AI 设定）。缺了它 %player% 替换为空、
+        // 玩家名（全局 player_profile 文件驱动，解耦玩家与 AI 设定）。缺了它 %player% 替换为空、
         // 前端玩家气泡也会显示空名（issue #8）。读不到就保持原值，不阻断试玩。
         let uname = user_name_of(db, main_id).await;
         if !uname.is_empty() {
@@ -1727,20 +1727,14 @@ async fn build_main_role_prompt(
         );
     }
     // 用 by_settings 版本而不是自己拼参数：它会一并带上玩家名，
-    // 与正式游玩走的是同一条构建路径（玩家名从全局 player_profile 读取）
+    // 与正式游玩走的是同一条构建路径（玩家名从全局 player_profile 文件驱动读取）
     Some(MainRolePrompt {
         text: {
             let profile = crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(db)
                 .await
-                .unwrap_or(crate::db::entities::player_profile::Model {
-                    id: 1,
-                    user_name: "玩家".to_string(),
-                    user_subtitle: None,
-                    user_prompt: None,
-                    updated_at: None,
-                });
+                .unwrap_or_default();
             let player_name = profile.user_name;
-            let player_prompt = profile.user_prompt.unwrap_or_default();
+            let player_prompt = profile.to_prompt_fragment();
             sys_prompt_builder_by_settings(
                 &settings,
                 Some(&player_name),
@@ -1815,7 +1809,7 @@ async fn role_name_of(db: &DatabaseConnection, id: i32) -> Option<String> {
 }
 
 /// 玩家名。解耦玩家与 AI：不再从角色卡 settings.yml 读取，
-/// 而是从全局 player_profile 表读取。查不到或为空返回空串 ——
+/// 而是从全局 player_profile（文件驱动）读取。查不到或为空返回空串 ——
 /// 试玩用它显示玩家身份、替换 %player%，缺了只是显示空，不该阻断试玩（issue #8）。
 async fn user_name_of(db: &DatabaseConnection, _id: i32) -> String {
     use crate::db::managers::player_profile_repo::PlayerProfileRepo;

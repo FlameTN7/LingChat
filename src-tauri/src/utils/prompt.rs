@@ -178,8 +178,8 @@ fn build_framing_prefix_cn(user_name: &str, character_name: &str) -> String {
 
 /// 构建系统提示词。与 Python `Function.sys_prompt_builder` 语义一致。
 ///
-/// `player_prompt` 是全局玩家档案里的"玩家设定/介绍"（解耦玩家与 AI 后，
-/// 由 player_profile 表提供）。非空时追加到系统提示词末尾，让 AI 了解
+/// `player_prompt` 是全局玩家档案里的"玩家设定块"（解耦玩家与 AI 后，
+/// 由 player_profile 文件驱动提供）。非空时追加到系统提示词末尾，让 AI 了解
 /// 屏幕对面用户的真实身份与性格设定；为空则不影响原有行为。
 pub fn sys_prompt_builder(
     user_name: &str,
@@ -262,7 +262,7 @@ pub fn sys_prompt_builder(
 }
 
 /// 便捷包装：直接从 `CharacterSettings` 构建。
-/// `player_name` 解耦玩家与 AI：调用方从全局 player_profile 传入玩家名；
+/// `player_name` 解耦玩家与 AI：调用方从全局 player_profile（文件驱动）传入玩家名；
 /// 传 None 时回退 settings.user_name（兼容旧数据）。
 /// `player_prompt` 是全局玩家档案的"玩家设定/介绍"，非空时注入系统提示词。
 /// TODO: 这个似乎是给老角色用的，暂时用 allow_dead_code 标记
