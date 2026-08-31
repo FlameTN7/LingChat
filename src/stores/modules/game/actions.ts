@@ -8,6 +8,7 @@ import { useSettingsStore } from "../settings";
 import { useUserStore } from "../user/user";
 import type { SceneInfo } from "@/api/services/scene";
 import { invoke } from "@tauri-apps/api/core";
+import { unwrapPromptRole } from "@/utils/messageKind";
 
 export const actions = {
   appendGameMessage(this: GameState, message: GameMessage) {
@@ -276,7 +277,11 @@ export function convertInitLines(lines: GameLineInit[]): GameMessage[] {
   const filtered = lines.filter((line) => line.attribute !== "system" && line.attribute !== "tool");
 
   return filtered.map((line, index, array) => {
-    const filteredContent = line.content.replace(/\{[\s\S]*?\}/g, "").trim();
+    // `{旁白: ...}` 包裹需要把正文解析出来展示；普通正文沿用原有去大括号规则
+    const promptRole = unwrapPromptRole(line.content);
+    const filteredContent = promptRole.wrapped
+      ? promptRole.text
+      : line.content.replace(/\{[\s\S]*?\}/g, "").trim();
 
     const isLast = index === array.length - 1;
     const nextLine = isLast ? null : array[index + 1];
@@ -287,11 +292,19 @@ export function convertInitLines(lines: GameLineInit[]): GameMessage[] {
       }
     }
 
+    // 后端把旁白提示也存成 User 行：display_name 为旁白，或原文是 `{旁白: ...}`
+    // 包裹时，语义分类为 narrator；其余 User 行才是 player。
+    const isNarratorUser =
+      line.attribute === "user" &&
+      (line.display_name === "旁白" || (promptRole.wrapped && promptRole.role === "旁白"));
+
     return {
       type: (line.attribute === "user" ? "message" : "reply") as "message" | "reply",
       messageType:
         line.attribute === "user"
-          ? ("player" as const)
+          ? isNarratorUser
+            ? ("narrator" as const)
+            : ("player" as const)
           : line.attribute === "assistant"
             ? ("ai" as const)
             : line.attribute === "system"
