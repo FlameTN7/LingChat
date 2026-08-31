@@ -571,8 +571,12 @@ impl ScriptManager {
             gs.script_status = None;
         }
 
-        // 还原剧本切换过的玩家身份（弹出全部 chapter/script 快照，作用域到期）
-        restore_player_identity_for_script_end(ctx).await?;
+        // 还原剧本切换过的玩家身份（弹出全部 chapter/script 快照，作用域到期）。
+        // 还原失败只记录错误：is_running 与剧本状态清理必须继续，否则运行标记
+        // 会卡在 true，前端无法再开启下一场剧本。
+        if let Err(e) = restore_player_identity_for_script_end(ctx).await {
+            tracing::error!("[ScriptManager] 还原玩家身份失败: {e:#}");
+        }
 
         is_running.store(false, Ordering::SeqCst);
 

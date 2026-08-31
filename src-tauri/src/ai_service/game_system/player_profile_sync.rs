@@ -76,8 +76,7 @@ pub async fn rebuild_system_lines(
                 } else {
                     None
                 }
-            })
-            .flatten();
+            });
         let Some(settings) = settings else {
             tracing::warn!("System 行缺少角色设置，保留原样: role_id={}", rid);
             continue;
@@ -237,7 +236,9 @@ pub async fn apply_player_identity(
             let mut gs = svc.game_status.lock().await;
             gs.player.user_name = profile.user_name.clone();
             gs.player.user_subtitle = profile.user_subtitle.clone().unwrap_or_default();
-            gs.player.user_prompt = profile.user_prompt.clone().unwrap_or_default();
+            // GameStatus.player.user_prompt 与 AIService.player_prompt 同形态：
+            // 存格式化后的设定块（含简介/示例），不是档案里的原始 user_prompt 字段。
+            gs.player.user_prompt = player_prompt_fragment.clone();
             gs.player_identity_override.clear();
             rebuild_and_refresh(ctx.db, &data_dir, &mut gs, prompt_options).await?;
         }
