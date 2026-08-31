@@ -6,6 +6,7 @@ import type { ScriptEventType } from "../types";
 import { useAdventureStore } from "../stores/modules/adventure";
 import { useUIStore } from "../stores/modules/ui/ui";
 import { useGameStore } from "../stores/modules/game";
+import { useUserStore } from "../stores/modules/user/user";
 import { i18n } from "@/locales";
 import { useScriptEditorStore } from "../stores/modules/script-editor";
 import {
@@ -247,6 +248,33 @@ export function initializeTauriEventListeners() {
   listen("status:reset", (event) => {
     console.log("[Tauri] status:reset", event.payload);
     eventQueue.addEvent(asEvent(event.payload, { type: "status_reset", defaultDuration: 0 }));
+  });
+
+  // === 玩家档案同步 ===
+  // 后端保存玩家档案后广播此事件，供主窗口/设置窗口同步展示字段。
+  listen("player-profile-updated", (event) => {
+    const payload = event.payload as {
+      user_name: string;
+      user_subtitle: string;
+      user_prompt: string;
+      info: string;
+      system_prompt_example: string;
+      avatar_path: string | null;
+    };
+    console.log("[Tauri] player-profile-updated", payload);
+    const gameStore = useGameStore();
+    gameStore.applyPlayerProfile(payload.user_name || "玩家", payload.user_subtitle || "");
+    const userStore = useUserStore();
+    userStore.playerProfile = {
+      user_name: payload.user_name || "玩家",
+      user_subtitle: payload.user_subtitle || "",
+      user_prompt: payload.user_prompt || "",
+      info: payload.info || "",
+      system_prompt_example: payload.system_prompt_example || "",
+      // 头像可能不在本次保存范围内：事件里没有新值时保留旧值兜底
+      avatar_path: payload.avatar_path ?? userStore.playerProfile.avatar_path,
+    };
+    userStore.profileLoaded = true;
   });
 
   listen("tts:cleanup", (event) => {

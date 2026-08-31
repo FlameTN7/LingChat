@@ -22,6 +22,12 @@ export const actions = {
     this.dialogHistory = messages;
   },
 
+  /** 同步玩家身份展示字段（改名/改设定事件到达时调用） */
+  applyPlayerProfile(this: GameState, name: string, subtitle: string) {
+    this.userName = name;
+    this.userSubtitle = subtitle;
+  },
+
   async initializeGame(this: GameState) {
     try {
       const gameInfo = await getGameInfo();

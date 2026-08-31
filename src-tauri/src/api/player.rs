@@ -1,7 +1,8 @@
 use base64::Engine;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::AppState;
+use crate::ai_service::game_system::player_profile_sync::rebuild_system_lines;
 use crate::db::managers::player_profile_repo::{PlayerProfileData, PlayerProfileRepo};
 use crate::utils::prompt::{sys_prompt_builder_by_settings, PromptOptions};
 
@@ -62,45 +63,56 @@ pub async fn set_player_profile(
     let player_prompt = profile.to_prompt_fragment();
 
     {
-        let svc = state.ai_service.lock().await;
+        // 只加一次 AI 服务锁，在其内部依次锁 GameStatus 并完成全部状态修改，
+        // 避免持有不同层级的锁跨 await 时出现顺序死锁。
+        let mut svc = state.ai_service.lock().await;
 
-        // 2a. 更新 GameStatus.player，并替换历史 System 人设行里的旧玩家名
         {
             let mut gs = svc.game_status.lock().await;
-            let old_name = gs.player.user_name.clone();
-            gs.player.user_name = user_name.clone();
+            gs.player.user_name = profile.user_name.clone();
             gs.player.user_subtitle = profile.user_subtitle.clone().unwrap_or_default();
             gs.player.user_prompt = player_prompt.clone();
 
-            // 已注入的 System 人设行里 framing 嵌入了玩家名，改名后把这些行的旧名替换成新名，
-            // 避免 LLM 的 system 消息仍带着旧玩家名（用户反馈的"LLM 还是接到玩家"根因之一）。
-            if !old_name.is_empty() {
-                for line in &mut gs.line_list {
-                    if matches!(
-                        line.attribute(),
-                        crate::db::entities::line::LineAttribute::System
-                    ) {
-                        line.base.content = line.base.content.replace(&old_name, &user_name);
-                    }
-                }
-            }
+            // 改名/改设定热更新：按新玩家档案整体重建所有 System 人设行，
+            // 而不是用裸字符串替换（会误伤短名，如「你」「A」）。
+            rebuild_system_lines(&state.db, &svc.data_dir, &mut gs, prompt_options)
+                .await
+                .map_err(|e| format!("重建 System 人设行失败: {e}"))?;
+            gs.role_manager.invalidate_memory_history();
+            gs.refresh_memories(&state.db)
+                .await
+                .map_err(|e| format!("刷新角色记忆失败: {e}"))?;
         }
 
-        // 2b. 用新玩家名 + 玩家设定重建 AI 系统提示词（需要 &mut 修改 svc 字段）
-        let mut svc = svc;
-        svc.user_name = user_name.clone();
+        // 用新玩家名 + 玩家设定重建 AI 服务自身的系统提示词快照。
+        svc.user_name = profile.user_name.clone();
         svc.user_subtitle = profile.user_subtitle.clone();
         svc.player_prompt = player_prompt.clone();
 
         if let Some(settings) = svc.settings.clone() {
             svc.ai_prompt = sys_prompt_builder_by_settings(
                 &settings,
-                Some(&user_name),
+                Some(&profile.user_name),
                 prompt_options,
                 &player_prompt,
             );
         }
     }
+
+    // 锁释放后再广播事件，避免事件回调（其他窗口）等待后端锁造成串行等待。
+    // 多窗口同步：主窗口与设置窗口都会收到此事件并刷新本地玩家档案展示。
+    let avatar_path = PlayerProfileRepo::avatar_abs_path().map(|p| p.to_string_lossy().into_owned());
+    let _ = app.emit(
+        "player-profile-updated",
+        serde_json::json!({
+            "user_name": profile.user_name,
+            "user_subtitle": profile.user_subtitle.unwrap_or_default(),
+            "user_prompt": profile.user_prompt.unwrap_or_default(),
+            "info": profile.info.unwrap_or_default(),
+            "system_prompt_example": profile.system_prompt_example.unwrap_or_default(),
+            "avatar_path": avatar_path,
+        }),
+    );
 
     Ok(serde_json::json!({"success": true}))
 }
