@@ -598,8 +598,9 @@ pub(crate) async fn build_web_init_data(
     };
 
     // 加载全局玩家档案（解耦玩家与 AI 设定）
+    // 档案文件不存在时，自动尝试从当前 AIService 的角色设置迁移旧玩家数据。
     let player_profile = {
-        match PlayerProfileRepo::get_profile(&service.db).await {
+        match PlayerProfileRepo::ensure_profile(&service.db, service.settings.as_ref()).await {
             Ok(profile) => PlayerProfileInit {
                 user_name: profile.user_name.clone(),
                 user_subtitle: profile.user_subtitle.unwrap_or_default(),

@@ -127,9 +127,13 @@ impl AIService {
 
         // 玩家身份从全局 player_profile（文件驱动）加载（解耦：不再从角色 settings.yml 读取）
         // 读取整个档案，并把「设定块」（简介/人格/示例）合并注入系统提示词。
+        // 档案文件不存在时，自动尝试从旧角色卡迁移 user_name/user_subtitle。
         let (user_name, user_subtitle, player_prompt) = {
-            match crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(&self.db)
-                .await
+            match crate::db::managers::player_profile_repo::PlayerProfileRepo::ensure_profile(
+                &self.db,
+                Some(&settings),
+            )
+            .await
             {
                 Ok(profile) => {
                     let uname = profile.user_name.clone();

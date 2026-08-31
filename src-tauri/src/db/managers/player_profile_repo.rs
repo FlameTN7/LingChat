@@ -5,6 +5,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::ai_service::types::CharacterSettings;
+use crate::db::managers::role_repo::RoleRepo;
 use crate::init::static_copy::get_data_dir;
 
 /// 玩家档案数据（文件驱动）。字段与前端 `PlayerProfile` 接口对齐。
@@ -32,6 +33,15 @@ pub struct PlayerProfileData {
 
 fn default_user_name() -> String {
     "玩家".to_string()
+}
+
+/// 归一化旧角色卡中的文本字段：过滤空串、纯空白和 serde 缺省值。
+fn normalize_legacy_text(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "user_name未设定" {
+        return None;
+    }
+    Some(trimmed)
 }
 
 impl Default for PlayerProfileData {
@@ -85,31 +95,104 @@ impl PlayerProfileRepo {
         Self::player_dir().join("settings.yml")
     }
 
-    /// 读取玩家档案。
+    /// 读取玩家档案（兼容旧数据的便捷包装）。
     ///
-    /// 以 `game_data/player/settings.yml` 为准。文件不存在时回退到 `CharacterSettings`
-    /// 的 `user_name`（兼容旧数据），再回退默认 `("玩家", "", "")`。
-    /// `db` 参数保留仅为兼容既有调用点（历史版本从数据库表读取）。
-    pub async fn get_profile(_db: &DatabaseConnection) -> Result<PlayerProfileData> {
+    /// 实际逻辑见 [`Self::ensure_profile`]，此处等价于 `ensure_profile(db, None)`。
+    pub async fn get_profile(db: &DatabaseConnection) -> Result<PlayerProfileData> {
+        Self::ensure_profile(db, None).await
+    }
+
+    /// 确保玩家档案存在并返回可用档案。
+    ///
+    /// - 文件存在时照旧解析 `game_data/player/settings.yml`；
+    /// - 文件不存在时尝试从旧 AI 角色卡迁移 `user_name/user_subtitle`：
+    ///   优先使用调用方传入的 `fallback`，没有可用的 fallback 时再查数据库里的
+    ///   第一个主角色；旧卡上的 `system_prompt` 是 AI 角色人设，绝不能当成
+    ///   玩家的 `user_prompt` 迁移，避免 AI 人设"污染"玩家档案。
+    /// - 迁移成功后写入 `game_data/player/settings.yml`；写入失败只告警并继续
+    ///   返回内存中的迁移结果，不阻断启动，下次启动会重新尝试迁移。
+    pub async fn ensure_profile(
+        db: &DatabaseConnection,
+        fallback: Option<&CharacterSettings>,
+    ) -> Result<PlayerProfileData> {
         let path = Self::settings_path();
-        if !path.exists() {
-            // 文件尚不存在（首启用）：返回默认玩家档案
-            return Ok(PlayerProfileData::default());
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("读取玩家档案失败: {:?}", path))?;
+            let settings: CharacterSettings = serde_yaml::from_str(&content)
+                .with_context(|| format!("解析玩家档案失败: {:?}", path))?;
+
+            return Ok(PlayerProfileData {
+                user_name: settings.user_name,
+                user_subtitle: settings.user_subtitle,
+                user_prompt: settings.system_prompt,
+                info: settings.info,
+                system_prompt_example: settings.system_prompt_example,
+                avatar_path: None,
+            });
         }
 
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("读取玩家档案失败: {:?}", path))?;
-        let settings: CharacterSettings = serde_yaml::from_str(&content)
-            .with_context(|| format!("解析玩家档案失败: {:?}", path))?;
+        // 文件尚不存在：进入旧玩家数据自动迁移路径。
+        let migrated = fallback.and_then(Self::extract_legacy_profile_fields);
 
-        Ok(PlayerProfileData {
-            user_name: settings.user_name,
-            user_subtitle: settings.user_subtitle,
-            user_prompt: settings.system_prompt,
-            info: settings.info,
-            system_prompt_example: settings.system_prompt_example,
-            avatar_path: None,
-        })
+        // fallback 不可用时，从数据库主角色里找第一张含有效旧玩家字段的角色卡。
+        // 注意：这里只读取旧卡字段用于迁移，不修改/删除旧卡上的任何字段。
+        let (user_name, user_subtitle) = if let Some((name, subtitle)) = migrated {
+            (name, subtitle)
+        } else {
+            let mut found: Option<(String, Option<String>)> = None;
+            match RoleRepo::get_all_main_roles(db).await {
+                Ok(roles) => {
+                    for role in roles {
+                        match RoleRepo::get_role_settings_by_id(db, get_data_dir(), role.id).await {
+                            Ok(Some(settings)) => {
+                                if let Some(pair) = Self::extract_legacy_profile_fields(&settings) {
+                                    found = Some(pair);
+                                    break;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!("读取主角色设置以迁移玩家档案失败: role_id={}, {e}", role.id);
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("查询主角色列表以迁移玩家档案失败: {e}"),
+            }
+            found.unwrap_or_else(|| (PlayerProfileData::default().user_name, None))
+        };
+
+        let profile = PlayerProfileData {
+            user_name,
+            user_subtitle,
+            ..Default::default()
+        };
+
+        // 迁移后立即落盘；失败不阻断启动，后续调用仍会再次尝试迁移。
+        if let Err(e) = Self::save_profile(db, &profile).await {
+            tracing::warn!("旧玩家数据迁移写入失败，本次会话继续使用内存中的迁移结果，下次启动会重试: {e}");
+        } else {
+            tracing::info!("已从旧 AI 角色卡迁移玩家档案并写入 {}", path.display());
+        }
+
+        Ok(profile)
+    }
+
+    /// 从旧 AI 角色卡中提取可迁移的玩家字段。
+    ///
+    /// 过滤空串、纯空白以及 serde 缺省值 `user_name未设定`；`system_prompt`
+    /// 不会被带到这里（那是 AI 人设，不是玩家设定）。
+    fn extract_legacy_profile_fields(
+        settings: &CharacterSettings,
+    ) -> Option<(String, Option<String>)> {
+        let user_name = normalize_legacy_text(&settings.user_name)?;
+        let user_subtitle = settings
+            .user_subtitle
+            .as_deref()
+            .and_then(normalize_legacy_text)
+            .map(|s| s.to_string());
+        Some((user_name, user_subtitle))
     }
 
     /// 保存玩家档案到 `game_data/player/settings.yml`。
