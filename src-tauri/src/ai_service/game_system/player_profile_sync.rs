@@ -240,7 +240,13 @@ pub async fn apply_player_identity(
             // 存格式化后的设定块（含简介/示例），不是档案里的原始 user_prompt 字段。
             gs.player.user_prompt = player_prompt_fragment.clone();
             gs.player_identity_override.clear();
-            rebuild_and_refresh(ctx.db, &data_dir, &mut gs, prompt_options).await?;
+            // 档案已经写盘，这里失败只降级告警：脚本继续执行并广播事件；
+            // 若向上返回错误，会留下「磁盘已永久化但运行时/前端未同步」的半永久状态。
+            if let Err(e) = rebuild_and_refresh(ctx.db, &data_dir, &mut gs, prompt_options).await {
+                tracing::error!(
+                    "permanent 玩家身份已写盘，但重建 System 人设行/刷新记忆失败，重启或载入后生效: {e}"
+                );
+            }
         }
 
         svc.user_name = profile.user_name.clone();
