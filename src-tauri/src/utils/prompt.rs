@@ -218,12 +218,19 @@ pub fn sys_prompt_builder(
         };
 
         if ai_prompt.contains("日语翻译") {
-            tracing::warn!("你使用的人物为旧版，不能使用实时翻译功能");
-            return ai_prompt.to_string();
+            // 兼容旧卡：保留旧 prompt 原文作为主体早退，不拼格式提示，
+            // 但仍追加玩家设定块，避免旧卡完全感知不到新玩家档案。
+            let mut legacy = ai_prompt.to_string();
+            append_player_prompt(&mut legacy, player_prompt);
+            tracing::warn!("你使用的人物为旧版，已保留旧 prompt 并追加玩家设定块，但实时翻译功能不可用");
+            return legacy;
         }
         if ai_prompt.contains("以下是我的对话格式提示") {
-            tracing::warn!("你使用的人物为旧版，不进行拼接prompt");
-            return ai_prompt.to_string();
+            // 兼容旧卡：原文已自带格式提示，照旧早退，但补上玩家设定块。
+            let mut legacy = ai_prompt.to_string();
+            append_player_prompt(&mut legacy, player_prompt);
+            tracing::warn!("你使用的人物为旧版，已保留旧 prompt 并追加玩家设定块，不再拼接新格式提示");
+            return legacy;
         }
 
         let mut out = String::with_capacity(ai_prompt.len() + 4096);
@@ -244,8 +251,12 @@ pub fn sys_prompt_builder(
         };
 
         if ai_prompt.contains("以下是我的对话格式提示") {
-            tracing::warn!("你使用的人物为旧版，可能实时翻译功能不起作用");
-            return ai_prompt.to_string();
+            // 兼容旧卡：双语模式下原文已自带格式提示，照旧早退，
+            // 但仍追加玩家设定块，实时翻译功能可能不起作用。
+            let mut legacy = ai_prompt.to_string();
+            append_player_prompt(&mut legacy, player_prompt);
+            tracing::warn!("你使用的人物为旧版，已保留旧 prompt 并追加玩家设定块，但实时翻译功能可能不起作用");
+            return legacy;
         }
 
         let mut out = String::with_capacity(ai_prompt.len() + 4096);
