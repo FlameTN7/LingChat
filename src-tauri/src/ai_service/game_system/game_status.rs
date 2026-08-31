@@ -119,8 +119,11 @@ impl GameStatus {
     }
 
     pub async fn refresh_memories(&mut self, db: &DatabaseConnection) -> Result<()> {
+        // 先把玩家名 clone 出来，避免把 &self.player 借给 sync_memories 的同时
+        // 又可变借用 role_manager。
+        let player_name = self.player.user_name.clone();
         self.role_manager
-            .sync_memories(db, &self.line_list, None)
+            .sync_memories(db, &self.line_list, None, &player_name)
             .await
     }
 

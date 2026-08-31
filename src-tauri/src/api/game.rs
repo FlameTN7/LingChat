@@ -427,13 +427,21 @@ pub async fn clear_conversation(app: AppHandle) -> Result<WebInitData, String> {
 }
 
 /// 为台词列表计算玩家消息序号（1-indexed）。
-/// 玩家消息由 `sender_role_id == Some(0) && attribute == User` 标识。
+///
+/// 玩家消息由 `sender_role_id == Some(0) && attribute == User` 标识，但旁白
+/// 也以 User 行存储（display_name 为「旁白」，或原文以 `{旁白` 开头），
+/// 它们不是玩家发言，必须排除，否则玩家消息回溯会串号。
 pub fn compute_user_message_seqs(line_list: &[GameLine]) -> Vec<Option<u32>> {
     let mut count = 0u32;
     line_list
         .iter()
         .map(|gl| {
-            if gl.base.sender_role_id == Some(crate::ai_service::types::PLAYER_ROLE_ID) && matches!(gl.attribute(), LineAttribute::User) {
+            let is_player = gl.base.sender_role_id
+                == Some(crate::ai_service::types::PLAYER_ROLE_ID)
+                && matches!(gl.attribute(), LineAttribute::User);
+            let is_narrator = gl.base.display_name.as_deref() == Some("旁白")
+                || gl.base.content.trim_start().starts_with("{旁白");
+            if is_player && !is_narrator {
                 count += 1;
                 Some(count)
             } else {

@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use crate::ai_service::config::AIServiceConfig;
 use crate::ai_service::game_system::game_status::GameStatus;
 use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
+use crate::ai_service::game_system::player_profile_sync::rebuild_system_lines;
 use crate::ai_service::game_system::role_manager::GameRoleManager;
 use crate::ai_service::game_system::script_engine::ScriptManager;
 use crate::ai_service::llm::LlmSlot;
@@ -236,21 +237,28 @@ impl AIService {
     }
 
     /// 载入存档台词并恢复 MemoryBank。
+    ///
+    /// `prompt_options` 用于在记忆刷新前按当前玩家档案重建 System 人设行，
+    /// 保证旧档里的旧名字/旧设定不会先进入角色记忆。
     pub async fn load_lines(
         &mut self,
         lines: Vec<GameLine>,
         main_role_id: i32,
         save_id: Option<i32>,
+        prompt_options: PromptOptions,
     ) -> Result<()> {
         {
             let mut gs = self.game_status.lock().await;
-            gs.role_manager.invalidate_memory_history();
             gs.line_list = lines;
             if let Some(sid) = save_id {
                 gs.active_save_id = Some(sid);
             }
-            gs.refresh_memories(&self.db).await?;
+            // 先加载主角设置，再整体重建旧档里的 System 行；旧 System 行不会被
+            // 后续 sync_memories 写进角色记忆。
             let _ = gs.get_role(&self.db, main_role_id).await?;
+            rebuild_system_lines(&self.db, &self.data_dir, &mut gs, prompt_options).await?;
+            gs.role_manager.invalidate_memory_history();
+            gs.refresh_memories(&self.db).await?;
             gs.current_role_id = Some(main_role_id);
             gs.main_role_id = Some(main_role_id);
         }
@@ -270,11 +278,17 @@ impl AIService {
 
     /// 从 DB 恢复所有 MemoryBank 到对应已加载角色，并惰性创建压缩系统。
     pub async fn restore_memory_banks(&mut self, save_id: i32) -> Result<()> {
+        // 玩家名用于永久记忆压缩时格式化旧 User 行；先取快照再二次加锁，
+        // 避免 tokio::Mutex 不可重入。
+        let player_name = {
+            let gs = self.game_status.lock().await;
+            gs.player.user_name.clone()
+        };
         self.game_status
             .lock()
             .await
             .role_manager
-            .load_memory_banks_from_db(&self.db, save_id, None)
+            .load_memory_banks_from_db(&self.db, save_id, None, &player_name)
             .await
     }
 
