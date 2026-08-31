@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::ai_service::types::CharacterSettings;
 use crate::db::managers::role_repo::RoleRepo;
 use crate::init::static_copy::get_data_dir;
+use crate::utils::yaml_file::write_json_as_yaml;
 
 /// 玩家档案数据（文件驱动）。字段与前端 `PlayerProfile` 接口对齐。
 ///
@@ -224,10 +225,13 @@ impl PlayerProfileRepo {
             obj.insert("system_prompt_example".to_string(), serde_json::json!(s));
         }
 
-        let yaml = serde_yaml::to_string(&obj)
-            .context("序列化玩家档案失败")?;
         let path = Self::settings_path();
-        std::fs::write(&path, yaml)
+
+        // 原子写入：write_json_as_yaml 先写同目录临时文件并 fsync，再 rename 覆盖；
+        // 覆盖前还会把旧档案复制为 settings.yml.bak 兜底，避免进程崩溃/断电时
+        // 把玩家档案截断成半截 YAML。字段形状保持与旧实现完全一致。
+        write_json_as_yaml(&path, &serde_json::Value::Object(obj))
+            .map_err(anyhow::Error::msg)
             .with_context(|| format!("写入玩家档案失败: {:?}", path))?;
 
         Ok(())
