@@ -201,7 +201,7 @@ impl PlayerProfileRepo {
     /// 写入的字段复用 `CharacterSettings` 的相关字段（user_name / user_subtitle /
     /// system_prompt / info / system_prompt_example），与角色卡存储格式一致。
     pub async fn save_profile(
-        _db: &DatabaseConnection,
+        db: &DatabaseConnection,
         profile: &PlayerProfileData,
     ) -> Result<()> {
         let dir = Self::player_dir();
