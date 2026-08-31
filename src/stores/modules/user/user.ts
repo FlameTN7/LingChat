@@ -54,22 +54,30 @@ export const useUserStore = defineStore("user", {
 
     /** 保存玩家档案 */
     async savePlayerProfile(profile: Partial<PlayerProfile>) {
+      // 先对当前档案做浅快照：后端保存失败时回滚本地乐观更新，
+      // 避免设置弹窗仍停留在“已保存”的表象。
+      const snapshot = { ...this.playerProfile };
       this.playerProfile = {
         ...this.playerProfile,
         ...profile,
       };
       try {
-        await setPlayerProfile(
+        const result = await setPlayerProfile(
           this.playerProfile.user_name,
           this.playerProfile.user_subtitle,
           this.playerProfile.user_prompt,
           this.playerProfile.info,
           this.playerProfile.system_prompt_example
         );
+        if (!result?.success) {
+          throw new Error("后端返回保存失败");
+        }
         return true;
       } catch (e) {
+        // 回滚失败写入；原错误继续向上抛，调用方可识别并展示具体原因
+        this.playerProfile = snapshot;
         console.error("保存玩家档案失败:", e);
-        return false;
+        throw e;
       }
     },
 

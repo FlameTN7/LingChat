@@ -215,31 +215,37 @@
 
         <!-- Footer -->
         <div
-          class="flex justify-end gap-3 border-t border-white/10
+          class="flex items-center justify-between gap-3 border-t border-white/10
             bg-[linear-gradient(180deg,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.1)_100%)] p-4"
         >
-          <button
-            class="cursor-pointer rounded-[20px] border-none bg-white/10 px-5 py-2 text-sm
-              font-medium text-white transition-all duration-200 hover:bg-white/20"
-            @click="handleClose"
-          >
-            {{ $t("settings.playerProfile.cancel") }}
-          </button>
-          <button
-            class="cursor-pointer rounded-[20px] border-none bg-[#5e72e4] px-5 py-2 text-sm
-              font-medium text-white transition-all duration-200 hover:enabled:-translate-y-px
-              hover:enabled:bg-[#4a5acf] hover:enabled:shadow-[0_4px_12px_rgba(94,114,228,0.3)]
-              disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="saving"
-            @click="saveSettings"
-          >
-            <span
-              v-if="saving"
-              class="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2
-                border-white/30 border-t-white"
-            ></span>
-            {{ saving ? $t("settings.playerProfile.saving") : $t("settings.playerProfile.save") }}
-          </button>
+          <!-- 保存失败的内联错误提示：不关闭弹窗，便于用户原地重试 -->
+          <p v-if="inlineError" class="m-0 min-w-0 flex-1 text-sm leading-relaxed text-rose-300">
+            {{ inlineError }}
+          </p>
+          <div class="flex shrink-0 gap-3">
+            <button
+              class="cursor-pointer rounded-[20px] border-none bg-white/10 px-5 py-2 text-sm
+                font-medium text-white transition-all duration-200 hover:bg-white/20"
+              @click="handleClose"
+            >
+              {{ $t("settings.playerProfile.cancel") }}
+            </button>
+            <button
+              class="cursor-pointer rounded-[20px] border-none bg-[#5e72e4] px-5 py-2 text-sm
+                font-medium text-white transition-all duration-200 hover:enabled:-translate-y-px
+                hover:enabled:bg-[#4a5acf] hover:enabled:shadow-[0_4px_12px_rgba(94,114,228,0.3)]
+                disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="saving"
+              @click="saveSettings"
+            >
+              <span
+                v-if="saving"
+                class="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2
+                  border-white/30 border-t-white"
+              ></span>
+              {{ saving ? $t("settings.playerProfile.saving") : $t("settings.playerProfile.save") }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -252,6 +258,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { Icon } from "../../base";
   import { useUserStore } from "../../../stores/modules/user/user";
+  import { useUIStore } from "../../../stores/modules/ui/ui";
   import type { PlayerProfile } from "../../../api/services/game-info";
 
   const props = defineProps<{
@@ -266,9 +273,11 @@
 
   const { t } = useI18n();
   const userStore = useUserStore();
+  const uiStore = useUIStore();
 
   const activeTab = ref("basic");
   const saving = ref(false);
+  const inlineError = ref("");
 
   // 本地表单副本
   const form = ref<PlayerProfile>({
@@ -301,6 +310,7 @@
     (visible) => {
       if (visible) {
         form.value = { ...props.profile };
+        inlineError.value = "";
         resetAvatar();
       }
     }
@@ -341,9 +351,10 @@
 
   async function saveSettings() {
     saving.value = true;
+    inlineError.value = "";
     try {
-      // 1. 保存文本字段
-      const ok = await userStore.savePlayerProfile({
+      // 1. 先保存文本字段；失败会抛错中止，后续头像上传不会执行
+      await userStore.savePlayerProfile({
         user_name: form.value.user_name.trim() || "玩家",
         user_subtitle: form.value.user_subtitle.trim(),
         user_prompt: form.value.user_prompt,
@@ -351,24 +362,36 @@
         system_prompt_example: form.value.system_prompt_example,
       });
 
-      // 2. 若有新头像，先上传头像（写保存后才拿到 avatar_path）
+      // 2. 文本保存成功后才上传头像
       if (avatarFile.value) {
         const ext = avatarFile.value.name.split(".").pop() || "png";
         const imageBase64 = await readFileAsBase64(avatarFile.value);
         await userStore.saveAvatar(imageBase64, ext);
       }
 
-      if (ok) {
-        // 同步更新弹窗表单的 avatar_path（保存头像后 userStore 已更新）
-        form.value = { ...userStore.playerProfile };
-        emit("saved");
-        emit("update:visible", false);
-      }
+      // 同步更新弹窗表单的 avatar_path（保存头像后 userStore 已更新）
+      form.value = { ...userStore.playerProfile };
+      uiStore.showSuccess({ message: t("settings.playerProfile.saved") });
+      emit("saved");
+      emit("update:visible", false);
     } catch (e) {
+      const message = errorMessage(e);
+      inlineError.value = message;
+      uiStore.showError({
+        title: t("stores.notification.errorTitle"),
+        message,
+      });
       console.error("保存玩家档案失败:", e);
     } finally {
       saving.value = false;
     }
+  }
+
+  /** 将 Tauri invoke 的字符串错误 / JS Error 统一转成可展示文本 */
+  function errorMessage(error: unknown): string {
+    if (typeof error === "string" && error.trim()) return error;
+    if (error instanceof Error && error.message) return error.message;
+    return t("stores.notification.unknownError");
   }
 
   function readFileAsBase64(file: File): Promise<string> {
