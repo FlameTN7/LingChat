@@ -300,8 +300,19 @@
     { id: "prompts", label: t("settings.playerProfile.tabs.prompts") },
   ]);
 
+  // 头像文件变化时路径可能仍是 game_data/player/头像.*，通过 ?v= 时间戳
+  // 强制刷新 webview 缓存，确保换格式/换内容后立即看到新头像。
+  const avatarVersion = ref(0);
+  watch(
+    () => form.value.avatar_path,
+    () => {
+      avatarVersion.value = Date.now();
+    }
+  );
   const avatarUrl = computed(() =>
-    form.value.avatar_path ? convertFileSrc(form.value.avatar_path) : ""
+    form.value.avatar_path
+      ? `${convertFileSrc(form.value.avatar_path)}?v=${avatarVersion.value}`
+      : ""
   );
 
   // 打开弹窗时同步表单

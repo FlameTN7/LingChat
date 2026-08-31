@@ -242,6 +242,21 @@ impl PlayerProfileRepo {
 
         let ext = if ext.is_empty() { "png" } else { ext };
         let filename = format!("头像.{}", ext);
+
+        // 换格式保存前先清理目录内其它「头像.*」文件：旧图可能是 png、新图
+        // 换成 webp，不清理会让 avatar_abs_path 的旧格式文件"复活"。
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(true);
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !is_dir && name.starts_with("头像") {
+                    if let Err(e) = std::fs::remove_file(entry.path()) {
+                        tracing::warn!("清理旧玩家头像失败: {:?}, {e}", entry.path());
+                    }
+                }
+            }
+        }
+
         let path = dir.join(&filename);
         std::fs::write(&path, data)
             .with_context(|| format!("写入玩家头像失败: {:?}", path))?;

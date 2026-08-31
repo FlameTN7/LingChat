@@ -102,8 +102,20 @@
   const playerName = computed(() => localProfile.value.user_name || "玩家");
   const playerSubtitle = computed(() => localProfile.value.user_subtitle || "");
   const playerInfo = computed(() => localProfile.value.info || "");
+
+  // 头像换格式/换文件后路径可能不变（仍是 game_data/player/头像.*），
+  // 加 ?v= 时间戳强制 webview 重新加载，避免显示磁盘里的旧缓存图。
+  const avatarVersion = ref(0);
+  watch(
+    () => localProfile.value.avatar_path,
+    () => {
+      avatarVersion.value = Date.now();
+    }
+  );
   const avatarUrl = computed(() =>
-    localProfile.value.avatar_path ? convertFileSrc(localProfile.value.avatar_path) : ""
+    localProfile.value.avatar_path
+      ? `${convertFileSrc(localProfile.value.avatar_path)}?v=${avatarVersion.value}`
+      : ""
   );
 
   async function loadProfile() {

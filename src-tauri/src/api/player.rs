@@ -40,6 +40,21 @@ pub async fn set_player_profile(
 ) -> Result<serde_json::Value, String> {
     let state = app.state::<AppState>();
 
+    // 0. 统一校验 + 归一化：先 trim，再检查长度与控制字符。
+    //    允许 \n 与 \t（多行设定/排版），拒绝其余 C0 控制字符。
+    let user_name = user_name.trim().to_string();
+    if contains_forbidden_control(&user_name) {
+        return Err("玩家昵称不能包含控制字符".to_string());
+    }
+    let name_chars = user_name.chars().count();
+    if name_chars == 0 || name_chars > 32 {
+        return Err("玩家昵称不能为空，且长度需为 1~32 个字符".to_string());
+    }
+    let user_subtitle = validate_optional_text("玩家副标题", user_subtitle, 64)?;
+    let user_prompt = validate_optional_text("玩家设定", user_prompt, 4000)?;
+    let info = validate_optional_text("玩家简介", info, 4000)?;
+    let system_prompt_example = validate_optional_text("玩家说话风格示例", system_prompt_example, 4000)?;
+
     // 1. 持久化到文件（game_data/player/settings.yml）
     let profile = PlayerProfileData {
         user_name: user_name.clone(),
@@ -134,10 +149,22 @@ pub async fn save_player_avatar(
         .decode(b64_payload)
         .map_err(|e| format!("解码图片数据失败: {e}"))?;
 
+    const ALLOWED_AVATAR_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
     let ext = ext
         .map(|s| s.trim_start_matches('.').to_lowercase())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "png".to_string());
+    if !ALLOWED_AVATAR_EXTS.contains(&ext.as_str()) {
+        return Err(format!(
+            "头像格式不支持: .{}，仅支持 png/jpg/jpeg/webp/gif/bmp",
+            ext
+        ));
+    }
+
+    // 解码后的真实字节数才是占用磁盘/内存的大小，必须在落盘前校验。
+    if data.len() > 10 * 1024 * 1024 {
+        return Err("头像图片过大，解码后不能超过 10MB".to_string());
+    }
 
     let filename = PlayerProfileRepo::save_avatar(&data, &ext)
         .map_err(|e| format!("保存玩家头像失败: {e}"))?;
@@ -150,4 +177,30 @@ pub async fn save_player_avatar(
         "filename": filename,
         "avatar_path": abs,
     }))
+}
+
+/// 是否包含不允许的控制字符：仅放行 \n 与 \t，其余 C0 控制字符拒绝。
+fn contains_forbidden_control(value: &str) -> bool {
+    value
+        .chars()
+        .any(|c| (c as u32) < 0x20 && c != '\n' && c != '\t')
+}
+
+/// 校验可选文本字段：trim 首尾后返回归一化值；检查控制字符与字符数上限。
+fn validate_optional_text(
+    label: &str,
+    value: Option<String>,
+    max_chars: usize,
+) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim().to_string();
+    if contains_forbidden_control(&trimmed) {
+        return Err(format!("{}不能包含除换行和制表符以外的控制字符", label));
+    }
+    if trimmed.chars().count() > max_chars {
+        return Err(format!("{}长度不能超过 {} 个字符", label, max_chars));
+    }
+    Ok(Some(trimmed))
 }
