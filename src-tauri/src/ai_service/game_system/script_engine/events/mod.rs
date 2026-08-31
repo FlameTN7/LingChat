@@ -144,6 +144,19 @@ pub fn create_event(event_type: &str, event_data: Value) -> Option<Box<dyn Scrip
     registry.get(event_type).map(|f| f(event_data))
 }
 
+/// 返回注册表中全部事件类型（排序去重）。
+///
+/// 供编辑器 schema 的测试动态核对「引擎注册表 ↔ schema 单一真相源」：
+/// 两边任一侧新增/移除事件，测试都会失败，倒逼同步修改，避免再出现
+/// 注释、schema、注册表三处计数各说各话。
+pub fn registered_event_types() -> Vec<&'static str> {
+    let registry = REGISTRY.read().expect("event registry poisoned");
+    let mut keys: Vec<&'static str> = registry.keys().copied().collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 /// 从事件 YAML 里读取 `duration`（事件间隔秒数）。
 /// 各 handler 在 `from_event_data` 里调用，随后写入给前端的展示 payload。
 /// 只接受数字；负数允许（由前端按「等玩家」处理），但 None 表示「没写」。
