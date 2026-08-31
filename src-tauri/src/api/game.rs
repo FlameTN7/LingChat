@@ -601,7 +601,7 @@ pub(crate) async fn build_web_init_data(
     let player_profile = {
         match PlayerProfileRepo::get_profile(&service.db).await {
             Ok(profile) => PlayerProfileInit {
-                user_name: profile.user_name,
+                user_name: profile.user_name.clone(),
                 user_subtitle: profile.user_subtitle.unwrap_or_default(),
                 user_prompt: profile.user_prompt.unwrap_or_default(),
                 info: profile.info.unwrap_or_default(),

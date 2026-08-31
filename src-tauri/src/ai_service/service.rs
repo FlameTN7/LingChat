@@ -132,8 +132,8 @@ impl AIService {
                 .await
             {
                 Ok(profile) => {
-                    let uname = profile.user_name;
-                    let usub = profile.user_subtitle.unwrap_or_default();
+                    let uname = profile.user_name.clone();
+                    let usub = profile.user_subtitle.clone().unwrap_or_default();
                     let uprompt = profile.to_prompt_fragment();
                     (uname, usub, uprompt)
                 }

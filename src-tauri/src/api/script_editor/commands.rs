@@ -1733,7 +1733,7 @@ async fn build_main_role_prompt(
             let profile = crate::db::managers::player_profile_repo::PlayerProfileRepo::get_profile(db)
                 .await
                 .unwrap_or_default();
-            let player_name = profile.user_name;
+            let player_name = profile.user_name.clone();
             let player_prompt = profile.to_prompt_fragment();
             sys_prompt_builder_by_settings(
                 &settings,
