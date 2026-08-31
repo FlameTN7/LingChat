@@ -238,6 +238,7 @@
               overflow-y-auto border-none bg-transparent font-[inherit] text-xl font-bold break-all
               whitespace-pre-line outline-none text-shadow-[inherit]"
             @keydown.enter.exact.prevent="sendOrContinue"
+            @click="sendOrContinue"
           >
             <!-- 台词区：白字（内联模式台词 / 标准模式正文） -->
             <div ref="dialogueLineRef" class="whitespace-pre-line text-white"></div>
