@@ -423,14 +423,20 @@ impl ScriptManager {
                 no_emotion_limit: true,
             };
             if !prompt.is_empty() {
+                // 只加一次锁取出玩家信息并在独立作用域内立即释放，
+                // 避免在 sys_prompt_builder 参数求值中对同一个 tokio::Mutex 连续加锁导致死锁。
+                let (user_name, user_prompt) = {
+                    let guard = ctx.game_status.lock().await;
+                    (guard.player.user_name.clone(), guard.player.user_prompt.clone())
+                };
                 let ai_prompt = sys_prompt_builder(
-                    &ctx.game_status.lock().await.player.user_name,
+                    &user_name,
                     &settings.ai_name,
                     &prompt,
                     settings.system_prompt_example.as_deref(),
                     settings.system_prompt_example_old.as_deref(),
                     prompt_options,
-                    &ctx.game_status.lock().await.player.user_prompt,
+                    &user_prompt,
                 );
                 let sys_line = LineBase {
                     content: ai_prompt,
