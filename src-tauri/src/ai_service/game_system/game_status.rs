@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::ai_service::game_system::role_manager::GameRoleManager;
 use crate::ai_service::types::{
-    GameLine, GameRole, LineAttributeExt, LineBase, Player, ScriptStatus,
+    GameLine, GameRole, IdentityScope, LineAttributeExt, LineBase, Player, ScriptStatus,
 };
 use crate::db::entities::line::LineAttribute;
 use crate::utils::prompt::PromptRole;
@@ -17,10 +17,13 @@ use crate::utils::prompt::PromptRole;
 pub struct GameStatus {
     pub player: Player,
 
-    /// 剧本切换玩家身份时的原始身份快照。
-    /// `set_player_identity` 事件应用新身份前保存在此，chapter_end / on_script_end
-    /// 捕获到它时还原。None 表示当前没有剧本级玩家身份切换。
-    pub player_identity_override: Option<Player>,
+    /// 剧本切换玩家身份时的原始身份快照栈。
+    ///
+    /// 栈语义：每次 chapter/script 作用域切换前把「当前身份 + 生效 scope」压栈，
+    /// chapter_end 只弹出栈顶连续的 chapter 快照，on_script_end 弹出全部
+    /// chapter/script 快照；试玩预览中 permanent 会降级为 script 入栈，
+    /// 这样试玩结束时 PreviewSession 的整场还原能兜底。
+    pub player_identity_override: Vec<(Player, IdentityScope)>,
 
     /// 台词列表，用于记忆构建和历史记忆
     pub line_list: Vec<GameLine>,
@@ -73,7 +76,7 @@ impl GameStatus {
     pub fn new(role_manager: GameRoleManager) -> Self {
         Self {
             player: Player::default(),
-            player_identity_override: None,
+            player_identity_override: Vec::new(),
             line_list: Vec::new(),
             role_manager,
             current_role_id: None,

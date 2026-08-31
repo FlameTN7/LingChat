@@ -431,6 +431,29 @@ export function initializeTauriEventListeners() {
     eventQueue.addEvent(asEvent(event.payload, { type: "free_dialogue", defaultDuration: 0 }));
   });
 
+  // 剧本内玩家身份切换：所有 scope 都同步游戏展示字段；
+  // 只有 permanent 才真正写入全局档案，因此也只在该 scope 下同步 userStore。
+  listen("script:player-identity", (event) => {
+    const payload = event.payload as {
+      userName: string;
+      userSubtitle: string;
+      userPrompt: string;
+      scope: string;
+    };
+    console.log("[Tauri] script:player-identity", payload);
+    useGameStore().applyPlayerProfile(payload.userName || "玩家", payload.userSubtitle || "");
+    if (payload.scope === "permanent") {
+      const userStore = useUserStore();
+      userStore.playerProfile = {
+        ...userStore.playerProfile,
+        user_name: payload.userName || "玩家",
+        user_subtitle: payload.userSubtitle || "",
+        user_prompt: payload.userPrompt || "",
+      };
+      // profileLoaded 保持现状：档案其余字段（info/头像等）没有变化，不必标记重新加载
+    }
+  });
+
   // === God Agent multi-dialogue event ===
 
   listen("character:switch", async (event) => {

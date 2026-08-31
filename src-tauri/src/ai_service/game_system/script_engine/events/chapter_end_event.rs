@@ -11,6 +11,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::ai_service::game_system::player_profile_sync::restore_player_identity_for_chapter;
 use crate::ai_service::game_system::script_engine::events::{
     ScriptContext, ScriptEvent, evaluate_condition, register_event,
 };
@@ -126,14 +127,9 @@ impl ScriptEvent for ChapterEndEvent {
             next
         );
 
-        // 章节结束：还原剧本内切换的玩家身份（set_player_identity 的 chapter 作用域到期）
-        {
-            let mut gs = ctx.game_status.lock().await;
-            if let Some(original) = gs.player_identity_override.take() {
-                gs.player = original;
-                tracing::info!("[ChapterEndEvent] 玩家身份已还原为 '{}'", gs.player.user_name);
-            }
-        }
+        // 章节结束：弹出栈顶连续的 chapter 快照（set_player_identity 的
+        // chapter 作用域到期）；script 作用域留给 on_script_end 处理。
+        restore_player_identity_for_chapter(ctx).await?;
 
         Ok(Some(next))
     }
