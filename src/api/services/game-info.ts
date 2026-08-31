@@ -46,15 +46,15 @@ export interface GameLineInit {
 
 // 2. 定义完整的初始化数据接口 (对应 Rust WebInitData)
 export interface PlayerProfile {
-  user_name: string
-  user_subtitle: string
-  user_prompt: string
+  user_name: string;
+  user_subtitle: string;
+  user_prompt: string;
   /** 简介 / 一句话人设 */
-  info: string
+  info: string;
   /** 说话风格示例 */
-  system_prompt_example: string
+  system_prompt_example: string;
   /** 玩家头像绝对路径（经 convertFileSrc 访问） */
-  avatar_path?: string | null
+  avatar_path?: string | null;
 }
 
 export interface WebInitData {

@@ -33,8 +33,7 @@ export const actions = {
           user_subtitle: gameInfo.player_profile.user_subtitle || "",
           user_prompt: gameInfo.player_profile.user_prompt || "",
           info: gameInfo.player_profile.info || "",
-          system_prompt_example:
-            gameInfo.player_profile.system_prompt_example || "",
+          system_prompt_example: gameInfo.player_profile.system_prompt_example || "",
           avatar_path: gameInfo.player_profile.avatar_path ?? null,
         };
         userStore.profileLoaded = true;
@@ -222,8 +221,7 @@ export function applyWebInitData(state: GameState, gameInfo: WebInitData): void 
   const settingsStore = useSettingsStore();
   // 玩家身份：优先从 player_profile 读取（解耦），fallback 到 character_settings 兼容旧数据
   state.userName = gameInfo.player_profile?.user_name ?? characterInfo.user_name;
-  state.userSubtitle =
-    gameInfo.player_profile?.user_subtitle ?? characterInfo.user_subtitle;
+  state.userSubtitle = gameInfo.player_profile?.user_subtitle ?? characterInfo.user_subtitle;
 
   uiStore.showCharacterTitle = characterInfo.ai_name;
   uiStore.showCharacterSubtitle = characterInfo.ai_subtitle;

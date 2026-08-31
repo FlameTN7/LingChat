@@ -81,7 +81,8 @@ export default {
       userNamePlaceholder: "Enter player name",
       userSubtitlePlaceholder: "Enter player subtitle",
       userPrompt: "Persona / Setting",
-      userPromptPlaceholder: "e.g. Her name is Ali, gentle but a bit sharp-tongued, likes baking and cats.",
+      userPromptPlaceholder:
+        "e.g. Her name is Ali, gentle but a bit sharp-tongued, likes baking and cats.",
       userPromptHint:
         "Tell the AI who you are (identity/personality/preferences) so it can respond more fittingly.",
       playerInfo: "Bio / One-line Persona",
@@ -423,8 +424,6 @@ export default {
     fields: {
       aiName: "AI Name",
       aiSubtitle: "AI Subtitle",
-      xUser Name",
-      userSubtitle: "User Subtitle",
       title: "Character Title",
       info: "Character Bio",
       systemPrompt: "System Prompt",
@@ -561,8 +560,6 @@ export default {
       aiNamePlaceholder: "Name used in conversations",
       aiSubtitle: "AI Subtitle",
       aiSubtitlePlaceholder: "e.g. Night Watcher / School Idol",
-      xUser Name",
-      userSubtitle: "User Subtitle",
       info: "Character Bio",
       infoPlaceholder: "Optional: shown in the character introduction",
     },

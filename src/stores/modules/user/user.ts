@@ -1,9 +1,5 @@
 import { defineStore } from "pinia";
-import {
-  getPlayerProfile,
-  savePlayerAvatar,
-  setPlayerProfile,
-} from "@/api/services/player";
+import { getPlayerProfile, savePlayerAvatar, setPlayerProfile } from "@/api/services/player";
 import type { PlayerProfile } from "@/api/services/game-info";
 
 export const useUserStore = defineStore("user", {
@@ -81,8 +77,7 @@ export const useUserStore = defineStore("user", {
     async saveAvatar(imageBase64: string, ext?: string) {
       try {
         const res = await savePlayerAvatar(imageBase64, ext);
-        this.playerProfile.avatar_path =
-          res.avatar_path || this.playerProfile.avatar_path;
+        this.playerProfile.avatar_path = res.avatar_path || this.playerProfile.avatar_path;
         return res;
       } catch (e) {
         console.error("保存玩家头像失败:", e);

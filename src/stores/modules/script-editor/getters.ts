@@ -87,10 +87,7 @@ export const useEditorGetters = (s: StateRefs) => {
     }
     // 解耦玩家与 AI：剧本未覆盖时，用全局玩家档案名（user store 已由初始化加载）
     const userStore = useUserStore();
-    if (
-      userStore.playerProfile?.user_name &&
-      userStore.playerProfile.user_name !== "玩家"
-    ) {
+    if (userStore.playerProfile?.user_name && userStore.playerProfile.user_name !== "玩家") {
       return userStore.playerProfile.user_name;
     }
     return i18n.global.t("scriptEditor.fieldRow.mainRole");

@@ -36,8 +36,8 @@
           px-[13px] py-[11px]"
       >
         <div
-          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full
-            border-[1.5px] border-amber-400/35 bg-white/5"
+          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-[1.5px]
+            border-amber-400/35 bg-white/5"
         >
           <Icon icon="sliders" :size="18" />
         </div>
@@ -45,7 +45,7 @@
           <span class="font-semibold text-white">{{ playerName }}</span>
           <span v-if="playerSubtitle" class="text-xs text-white/45">{{ playerSubtitle }}</span>
           <span class="text-xs text-white/30">
-            {{ t('scriptEditor.characters.playerHint') }}
+            {{ t("scriptEditor.characters.playerHint") }}
           </span>
         </div>
       </div>
