@@ -121,6 +121,8 @@
   async function loadProfile() {
     await userStore.loadPlayerProfile();
     localProfile.value = { ...userStore.playerProfile };
+    // 每次从后端拉取都刷新缓存版本：文件路径不变但内容可能已换。
+    avatarVersion.value = Date.now();
   }
 
   function openModal() {
@@ -130,6 +132,8 @@
 
   function handleSaved() {
     localProfile.value = { ...userStore.playerProfile };
+    // 保存头像后路径通常不变（仍是 头像.<ext>），必须主动刷新版本参数。
+    avatarVersion.value = Date.now();
   }
 
   onMounted(loadProfile);

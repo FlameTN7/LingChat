@@ -90,13 +90,18 @@ pub async fn set_player_profile(
 
             // 改名/改设定热更新：按新玩家档案整体重建所有 System 人设行，
             // 而不是用裸字符串替换（会误伤短名，如「你」「A」）。
-            rebuild_system_lines(&state.db, &svc.data_dir, &mut gs, prompt_options)
+            // 档案已经落盘，这里失败只降级告警：命令仍返回成功，重启/重新载入
+            // 后会生效；若返回失败，前端会回滚本地表单，反而与磁盘新值不一致。
+            if let Err(e) = rebuild_system_lines(&state.db, &svc.data_dir, &mut gs, prompt_options)
                 .await
-                .map_err(|e| format!("重建 System 人设行失败: {e}"))?;
-            gs.role_manager.invalidate_memory_history();
-            gs.refresh_memories(&state.db)
-                .await
-                .map_err(|e| format!("刷新角色记忆失败: {e}"))?;
+            {
+                tracing::error!("重建 System 人设行失败，玩家档案已保存，重启或载入后生效: {e}");
+            } else {
+                gs.role_manager.invalidate_memory_history();
+                if let Err(e) = gs.refresh_memories(&state.db).await {
+                    tracing::error!("刷新角色记忆失败，玩家档案已保存，重启或载入后生效: {e}");
+                }
+            }
         }
 
         // 用新玩家名 + 玩家设定重建 AI 服务自身的系统提示词快照。
@@ -140,15 +145,6 @@ pub async fn save_player_avatar(
     image_base64: String,
     ext: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    // base64 数据可能带 data URL 前缀（如 `data:image/png;base64,`），剥离之。
-    let b64_payload = match image_base64.split_once(',') {
-        Some((prefix, payload)) if prefix.starts_with("data:") => payload,
-        _ => image_base64.as_str(),
-    };
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(b64_payload)
-        .map_err(|e| format!("解码图片数据失败: {e}"))?;
-
     const ALLOWED_AVATAR_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
     let ext = ext
         .map(|s| s.trim_start_matches('.').to_lowercase())
@@ -160,6 +156,16 @@ pub async fn save_player_avatar(
             ext
         ));
     }
+
+    // base64 数据可能带 data URL 前缀（如 `data:image/png;base64,`），剥离之。
+    // 扩展名白名单校验放在解码之前：非法格式不必先消耗内存解码。
+    let b64_payload = match image_base64.split_once(',') {
+        Some((prefix, payload)) if prefix.starts_with("data:") => payload,
+        _ => image_base64.as_str(),
+    };
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(b64_payload)
+        .map_err(|e| format!("解码图片数据失败: {e}"))?;
 
     // 解码后的真实字节数才是占用磁盘/内存的大小，必须在落盘前校验。
     if data.len() > 10 * 1024 * 1024 {

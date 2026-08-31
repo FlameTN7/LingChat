@@ -378,6 +378,8 @@
         const ext = avatarFile.value.name.split(".").pop() || "png";
         const imageBase64 = await readFileAsBase64(avatarFile.value);
         await userStore.saveAvatar(imageBase64, ext);
+        // 头像路径通常不变（仍是 头像.<ext>），主动刷新 ?v= 才能看到新内容。
+        avatarVersion.value = Date.now();
       }
 
       // 同步更新弹窗表单的 avatar_path（保存头像后 userStore 已更新）
