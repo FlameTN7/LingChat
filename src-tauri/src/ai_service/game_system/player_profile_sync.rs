@@ -189,8 +189,10 @@ pub async fn apply_player_identity(
 
     if effective_scope != IdentityScope::Permanent {
         let mut gs = ctx.game_status.lock().await;
+        // 先拷贝 player 再入栈，避免与 player_identity_override 的可变借用冲突（E0502）。
+        let player_snapshot = gs.player.clone();
         gs.player_identity_override
-            .push((gs.player.clone(), effective_scope));
+            .push((player_snapshot, effective_scope));
         apply_player_fields(
             &mut gs.player,
             user_name.as_deref(),
@@ -231,7 +233,9 @@ pub async fn apply_player_identity(
     {
         // 只加一次 AI 服务锁；GameStatus 是 AIService 的字段，不在这里再次
         // 单独 lock ctx.game_status（tokio::Mutex 不可重入，嵌套会死锁）。
-        let mut svc = ctx.app.state::<crate::AppState>().ai_service.lock().await;
+        // 先绑定 AppState 到 let，避免 `.ai_service` 临时值在语句末尾被丢弃（E0716）。
+        let app_state = ctx.app.state::<crate::AppState>();
+        let mut svc = app_state.ai_service.lock().await;
         {
             let mut gs = svc.game_status.lock().await;
             gs.player.user_name = profile.user_name.clone();

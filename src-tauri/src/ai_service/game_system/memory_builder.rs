@@ -63,7 +63,7 @@ impl MemoryBuilder {
     /// 判断是否应使用当前玩家档案名替代行内旧 display_name 的 User 行。
     /// 旁白/系统不替换：它们是叙事者，不是玩家发言。
     fn use_current_player_name(&self, line: &LineBase) -> bool {
-        matches!(line.attribute(), LineAttribute::User)
+        matches!(line.attribute, LineAttribute::User)
             && line.sender_role_id == Some(PLAYER_ROLE_ID)
             && !matches!(line.display_name.as_deref(), Some("旁白" | "系统"))
     }

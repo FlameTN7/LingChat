@@ -193,7 +193,7 @@ impl PlayerProfileRepo {
             .as_deref()
             .and_then(normalize_legacy_text)
             .map(|s| s.to_string());
-        Some((user_name, user_subtitle))
+        Some((user_name.to_string(), user_subtitle))
     }
 
     /// 保存玩家档案到 `game_data/player/settings.yml`。
