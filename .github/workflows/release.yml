@@ -1,8 +1,8 @@
 name: 打包发行版
 
 on:
-  push:
-    tags: ["v*"]
+  #push:
+    #  tags: ["v*"]
   workflow_dispatch:
     inputs:
       data_version:
