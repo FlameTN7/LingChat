@@ -244,10 +244,10 @@ pub async fn load_save(app: AppHandle, save_id: i32) -> Result<WebInitData, Stri
 
     // 7. 先恢复 MemoryBank：若在 load_lines（内部 sync_memories 会触发压缩检查）之后再恢复，
     //    后台全量重压会用旧库/旧指针把 DB 恢复的记忆库覆盖掉。
-    let _ = service
+    service
         .restore_memory_banks(save_id)
         .await
-        .map_err(|e| eprintln!("[SAVE_WARN] 恢复记忆库失败: {}", e));
+        .map_err(|e| format!("恢复记忆库失败: {}", e))?;
 
     // 8. 载入台词（sync_memories 用恢复后的正确指针，只压缩存档点之后的增量）
     service

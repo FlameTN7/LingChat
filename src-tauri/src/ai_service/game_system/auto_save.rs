@@ -15,6 +15,14 @@ const AUTO_SAVE_PREFIX: &str = "自动存档";
 const AUTO_SAVE_INTERVAL_SECS: u64 = 300; // 5 minutes
 const EXIT_SAVE_TIMEOUT_SECS: u64 = 5;
 
+/// Runtime state used to decide whether the target auto-save slot is current.
+/// Role revisions are sorted by `role_id` by `GameRoleManager` before hashing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoSaveFingerprint {
+    line_hash: u64,
+    memory_revisions: Vec<(i32, u64)>,
+}
+
 /// Payload emitted to frontend after each successful auto-save.
 #[derive(Debug, Clone, Serialize)]
 struct AutoSaveEventPayload {
@@ -27,8 +35,11 @@ pub struct AutoSaveManager {
     app: AppHandle,
     db: DatabaseConnection,
     ai_service: SharedAIService,
-    /// Hash of line_list at the moment of the last successful auto-save.
-    last_saved_hash: Option<u64>,
+    /// Snapshot fingerprint at the moment of the last successful auto-save.
+    last_saved_fingerprint: Option<AutoSaveFingerprint>,
+    /// Save slot to which `last_saved_fingerprint` was written. Fingerprints are
+    /// slot-local: the same runtime state in another save must not be skipped.
+    last_saved_save_id: Option<i32>,
     /// Resolved auto-save slot ID (lazily found or created on first save).
     auto_save_id: Option<i32>,
 }
@@ -39,7 +50,8 @@ impl AutoSaveManager {
             app,
             db,
             ai_service,
-            last_saved_hash: None,
+            last_saved_fingerprint: None,
+            last_saved_save_id: None,
             auto_save_id: None,
         }
     }
@@ -104,24 +116,27 @@ impl AutoSaveManager {
 
     /// Perform a save if line_list is non-empty and has changed since last save.
     async fn perform_save(&mut self) -> Result<(), String> {
-        // 1. Compute current hash (returns None if line_list is empty)
-        let current_hash = self.compute_line_hash().await;
-
-        let current_hash = match current_hash {
-            Some(h) => h,
-            None => {
-                // line_list is empty — nothing to save
-                return Ok(());
-            },
+        // 1. Compute the complete runtime fingerprint (returns None if there is
+        // no actual conversation to save).
+        let current_fingerprint = self.compute_fingerprint().await;
+        let current_fingerprint = match current_fingerprint {
+            Some(fingerprint) => fingerprint,
+            None => return Ok(()),
         };
 
-        // 2. Skip if unchanged since last save
-        if self.last_saved_hash == Some(current_hash) {
+        // 2. Find or create the auto-save slot before deciding whether to skip.
+        // This keeps the success marker explicitly scoped to that slot.
+        let save_id = self.find_or_create_slot().await?;
+
+        // 3. A completed memory compression changes this fingerprint even when
+        // line_list is unchanged, so it cannot be skipped.
+        if self.last_saved_save_id == Some(save_id)
+            && self.last_saved_fingerprint.as_ref() == Some(&current_fingerprint)
+        {
             return Ok(());
         }
 
-        // 3. Find or create the auto-save slot
-        let save_id = self.find_or_create_slot().await?;
+        // 4. Perform the actual save
 
         // 4. Perform the actual save
         let mut service = self.ai_service.lock().await;
@@ -143,16 +158,19 @@ impl AutoSaveManager {
             .await
             .map_err(|e| format!("保存状态失败: {}", e))?;
 
-        // 4d. Persist memory banks
-        service
+        // 4d. Persist memory banks. The repository returns the revisions from
+        // the immutable snapshots it actually wrote, so a concurrent commit
+        // cannot make the success marker claim a newer bank was persisted.
+        let saved_memory_revisions = service
             .persist_memory_banks(save_id)
             .await
             .map_err(|e| format!("保存记忆库失败: {}", e))?;
 
         // 4e. Persist script state (if running)
         if let Some(ref script_status) = service.game_status.lock().await.script_status {
-            let vars_json = serde_json::to_string(&script_status.vars).unwrap_or_default();
-            let _ = SaveRepo::upsert_running_script(
+            let vars_json = serde_json::to_string(&script_status.vars)
+                .map_err(|e| format!("序列化剧本状态失败: {}", e))?;
+            SaveRepo::upsert_running_script(
                 &self.db,
                 save_id,
                 &script_status.folder_key,
@@ -161,15 +179,20 @@ impl AutoSaveManager {
                 script_status.current_event_process,
             )
             .await
-            .map_err(|e| {
-                tracing::warn!("[AutoSave] 保存剧本状态失败: {}", e);
-            });
+            .map_err(|e| format!("保存剧本状态失败: {}", e))?;
         }
 
         drop(service);
 
-        // 5. Update tracking state
-        self.last_saved_hash = Some(current_hash);
+        // 5. Update tracking state only after every required write above succeeds.
+        // Replace memory revisions with the revisions captured by the successful
+        // DB write; this is the exact snapshot represented by this save slot.
+        let saved_fingerprint = AutoSaveFingerprint {
+            line_hash: current_fingerprint.line_hash,
+            memory_revisions: saved_memory_revisions,
+        };
+        self.last_saved_fingerprint = Some(saved_fingerprint);
+        self.last_saved_save_id = Some(save_id);
 
         // 6. Emit event to frontend
         let now = Local::now();
@@ -192,32 +215,40 @@ impl AutoSaveManager {
     /// Exit save: force a save regardless of change detection.
     async fn perform_exit_save(&mut self) -> Result<(), String> {
         // Reset hash to force save even if nothing changed
-        self.last_saved_hash = None;
+        self.invalidate_saved_fingerprint();
         self.perform_save().await
     }
 
     // ========== Helpers ==========
 
-    /// Compute a hash of the current line_list contents.
-    /// Returns `None` if the list is empty (nothing to save).
-    async fn compute_line_hash(&self) -> Option<u64> {
+    /// Clear the target-slot success marker, for example after loading a save.
+    pub fn invalidate_saved_fingerprint(&mut self) {
+        self.last_saved_fingerprint = None;
+        self.last_saved_save_id = None;
+    }
+
+    /// Compute a stable fingerprint of line history and all loaded MemoryBanks.
+    async fn compute_fingerprint(&self) -> Option<AutoSaveFingerprint> {
         let service = self.ai_service.lock().await;
-        let lines = &service.game_status.lock().await.line_list;
+        let status = service.game_status.lock().await;
 
         // 初始化时 line_list 自带一条 system 台词（角色人设），
         // 只有大于 1 条时才说明有实际对话发生，才需要自动存档。
-        if lines.len() <= 1 {
+        if status.line_list.len() <= 1 {
             return None;
         }
 
         let mut hasher = DefaultHasher::new();
-        for line in lines {
+        for line in &status.line_list {
             line.base.content.hash(&mut hasher);
             line.base.sender_role_id.hash(&mut hasher);
             line.base.attribute.as_str().hash(&mut hasher);
         }
 
-        Some(hasher.finish())
+        Some(AutoSaveFingerprint {
+            line_hash: hasher.finish(),
+            memory_revisions: status.role_manager.memory_bank_revisions(),
+        })
     }
 
     /// Find the existing auto-save slot by title prefix, or create a new one.

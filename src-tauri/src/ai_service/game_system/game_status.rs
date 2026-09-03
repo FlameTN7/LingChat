@@ -100,8 +100,11 @@ impl GameStatus {
     }
 
     /// 追加台词，记录当前在场者为感知列表，并刷新相关角色的记忆。
+    ///
+    /// 尾部追加不会使正在处理的压缩任务失效：任务已经捕获了自己的
+    /// `target_idx`，新台词会自然留给下一批。撤回、读档和清空等历史重写
+    /// 仍由各自入口显式调用 `invalidate_memory_history`。
     pub async fn add_line(&mut self, db: &DatabaseConnection, line: LineBase) -> Result<()> {
-        self.role_manager.invalidate_memory_history();
         let perceived: Vec<i32> = self.present_role_ids.iter().copied().collect();
         let game_line = GameLine::from_base(line, perceived);
         self.line_list.push(game_line);

@@ -139,6 +139,8 @@ pub struct PersistentMemorySystem {
     history_revision: Arc<AtomicU64>,
     /// 把历史失效与后台成功/失败提交放进同一同步边界，封闭最终 revision 检查的 TOCTOU。
     commit_gate: Arc<std::sync::Mutex<()>>,
+    /// 已提交 MemoryBank 快照的单调版本。仅由运行时维护，保存层按快照指纹使用。
+    bank_revision: Arc<AtomicU64>,
 
     /// 最近一次压缩失败的时间戳（unix 毫秒），0 = 无失败。用于重试冷却。
     last_failure_at_ms: Arc<AtomicU64>,
@@ -153,6 +155,15 @@ pub struct PersistentMemorySystem {
     section_limits: MemorySectionLimits,
 
     section_prompts: HashMap<String, String>,
+}
+
+/// 可供保存层和诊断工具读取的不可变 MemoryBank 快照。
+#[derive(Clone, Debug)]
+pub struct MemorySnapshot {
+    pub role_id: i32,
+    pub bank: GameMemoryBank,
+    pub revision: u64,
+    pub updating: bool,
 }
 
 /// 无论后台任务成功、显式失败还是 panic 展开，都解除 updating 锁。
@@ -183,8 +194,12 @@ fn record_failure_if_current(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_update_if_current(
-    commit_gate: &std::sync::Mutex<()>,
+/// Commit a completed update while the caller holds `commit_gate`.
+///
+/// The gate must be acquired before taking the bank lock. Callers use
+/// `try_lock` while holding the gate and retry after yielding, so no non-Send
+/// synchronous guard is held across an await.
+fn commit_update_under_gate(
     history_revision: &AtomicU64,
     expected_revision: u64,
     bank: &mut GameMemoryBank,
@@ -193,10 +208,8 @@ fn commit_update_if_current(
     last_failure_at_ms: &AtomicU64,
     fail_count: &AtomicU32,
     has_pending: &AtomicBool,
+    bank_revision: &AtomicU64,
 ) -> bool {
-    let _gate = commit_gate
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if history_revision.load(Ordering::Acquire) != expected_revision {
         return false;
     }
@@ -210,6 +223,7 @@ fn commit_update_if_current(
     last_failure_at_ms.store(0, Ordering::Release);
     fail_count.store(0, Ordering::Release);
     has_pending.store(true, Ordering::Release);
+    bank_revision.fetch_add(1, Ordering::AcqRel);
     true
 }
 
@@ -233,6 +247,7 @@ impl PersistentMemorySystem {
             has_pending: Arc::new(AtomicBool::new(false)),
             history_revision: Arc::new(AtomicU64::new(0)),
             commit_gate: Arc::new(std::sync::Mutex::new(())),
+            bank_revision: Arc::new(AtomicU64::new(0)),
             last_failure_at_ms: Arc::new(AtomicU64::new(0)),
             fail_count: Arc::new(AtomicU32::new(0)),
             enabled,
@@ -249,13 +264,80 @@ impl PersistentMemorySystem {
         self.enabled
     }
 
-    /// 在台词历史发生追加、撤回、清空或读档时使进行中的后台摘要立即过期。
+    /// 返回当前不可变 MemoryBank 快照；不在锁内执行任何异步或外部操作。
+    pub async fn snapshot(&self) -> MemorySnapshot {
+        // Use the same gate → bank order as commit/reset. A plain bank lock
+        // followed by an atomic revision read can otherwise observe an old bank
+        // paired with a newer revision when a commit races this snapshot.
+        loop {
+            let gate = self
+                .commit_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Ok(bank_guard) = self.memory_bank.try_lock() {
+                let bank = bank_guard.clone();
+                let revision = self.bank_revision.load(Ordering::Acquire);
+                drop(bank_guard);
+                drop(gate);
+                return MemorySnapshot {
+                    role_id: self.role_id,
+                    bank,
+                    revision,
+                    updating: self.is_updating.load(Ordering::Acquire),
+                };
+            }
+            drop(gate);
+            tokio::task::yield_now().await;
+        }
+    }
+
+    pub fn is_updating(&self) -> bool {
+        self.is_updating.load(Ordering::Acquire)
+    }
+
+    pub fn bank_revision(&self) -> u64 {
+        self.bank_revision.load(Ordering::Acquire)
+    }
+
+    /// 在追加以外的历史变化发生时使后台摘要立即过期。
     pub fn invalidate_history(&self) {
         let _gate = self
             .commit_gate
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.history_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Invalidate a rewrite and reset summaries that contain the rewritten prefix.
+    ///
+    /// The bank is reset under the same gate → bank order as commits. This keeps
+    /// stale summaries out of context after rollback/load while allowing a
+    /// rewrite at the already-processed boundary to retain valid summaries.
+    pub async fn rewrite_from(&self, from_idx: usize) {
+        loop {
+            let gate = self
+                .commit_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Ok(mut bank) = self.memory_bank.try_lock() {
+                let processed = bank.meta.last_processed_global_idx.max(0) as usize;
+                self.history_revision.fetch_add(1, Ordering::AcqRel);
+                // Failure cooldown belongs to the old history epoch and must
+                // not suppress retries after a rewrite.
+                self.last_failure_at_ms.store(0, Ordering::Release);
+                self.fail_count.store(0, Ordering::Release);
+                if from_idx < processed {
+                    *bank = GameMemoryBank::default();
+                    self.bank_revision.fetch_add(1, Ordering::AcqRel);
+                    self.has_pending.store(true, Ordering::Release);
+                }
+                drop(bank);
+                drop(gate);
+                return;
+            }
+            drop(gate);
+            tokio::task::yield_now().await;
+        }
     }
 
     #[cfg(test)]
@@ -330,21 +412,44 @@ impl PersistentMemorySystem {
         if !self.has_pending.load(Ordering::Acquire) {
             return;
         }
+        // Synchronize the pending flag with commit: otherwise a commit that
+        // lands between cloning the bank and clearing `has_pending` can have its
+        // new snapshot marked as already synchronized.
+        let Ok(gate) = self.commit_gate.try_lock() else {
+            return;
+        };
         if let Ok(bank) = self.memory_bank.try_lock() {
             role.memory_bank = bank.clone();
             self.has_pending.store(false, Ordering::Release);
         }
+        drop(gate);
     }
 
     /// 从 DB 加载后重置内部缓存（丢弃任何待处理的过期更新）。
     /// 同时清失败状态：指针仍停在 DB 中的旧位置，重试从新会话重新计时。
     pub async fn reset_from(&self, bank: &GameMemoryBank) {
-        self.invalidate_history();
-        self.has_pending.store(false, Ordering::Release);
-        self.last_failure_at_ms.store(0, Ordering::Release);
-        self.fail_count.store(0, Ordering::Release);
-        let mut mb = self.memory_bank.lock().await;
-        *mb = bank.clone();
+        // Keep the lock order identical to the commit path. Do not await an
+        // async bank lock while holding the synchronous gate: retrying with
+        // try_lock preserves both Send-ness and deadlock freedom.
+        loop {
+            let gate = self
+                .commit_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Ok(mut mb) = self.memory_bank.try_lock() {
+                self.history_revision.fetch_add(1, Ordering::AcqRel);
+                self.has_pending.store(false, Ordering::Release);
+                self.last_failure_at_ms.store(0, Ordering::Release);
+                self.fail_count.store(0, Ordering::Release);
+                *mb = bank.clone();
+                self.bank_revision.fetch_add(1, Ordering::AcqRel);
+                drop(mb);
+                drop(gate);
+                return;
+            }
+            drop(gate);
+            tokio::task::yield_now().await;
+        }
     }
 
     // ── 触发检查（主线程调用） ──
@@ -375,18 +480,27 @@ impl PersistentMemorySystem {
         // 否则指针残留旧值，get_slice_start_index 会一直返回过期大索引，
         // 导致上下文窗口无限膨胀且每轮都从 index 0 重建整段上下文。
         let (last_idx, pointer_corrected) = {
+            let gate = match self.commit_gate.try_lock() {
+                Ok(g) => g,
+                Err(_) => return, // 后台任务正在提交，跳过
+            };
             let mut bank_guard = match self.memory_bank.try_lock() {
                 Ok(g) => g,
                 Err(_) => return, // 后台任务正在写，跳过
             };
             let idx = bank_guard.meta.last_processed_global_idx;
-            if idx < 0 || idx as usize > current_total {
+            let result = if idx < 0 || idx as usize > current_total {
                 bank_guard.meta.last_processed_global_idx = 0;
                 bank_guard.meta.updated_at = now_str();
+                self.bank_revision.fetch_add(1, Ordering::AcqRel);
                 (0, true)
             } else {
                 (idx as usize, false)
-            }
+            };
+            // Keep the gate held through the bank mutation and revision update.
+            drop(bank_guard);
+            drop(gate);
+            result
         };
         if pointer_corrected {
             self.has_pending.store(true, Ordering::Release);
@@ -401,11 +515,17 @@ impl PersistentMemorySystem {
         }
 
         if chat_text.trim().is_empty() {
-            // 区间对该角色完全不可见，直接移动指针避免无限触发
-            if let Ok(mut bank) = self.memory_bank.try_lock() {
-                bank.meta.last_processed_global_idx = target_idx;
-                bank.meta.updated_at = now_str();
-                self.has_pending.store(true, Ordering::Release);
+            // 区间对该角色完全不可见，直接移动指针避免无限触发。
+            // 与提交/重置一致先取 gate，再取 bank，避免 revision 与 bank
+            // 快照被并发写入拆开。
+            if let Ok(gate) = self.commit_gate.try_lock() {
+                if let Ok(mut bank) = self.memory_bank.try_lock() {
+                    bank.meta.last_processed_global_idx = target_idx;
+                    bank.meta.updated_at = now_str();
+                    self.bank_revision.fetch_add(1, Ordering::AcqRel);
+                    self.has_pending.store(true, Ordering::Release);
+                }
+                drop(gate);
             }
             return;
         }
@@ -440,6 +560,7 @@ impl PersistentMemorySystem {
         let prompts = self.section_prompts.clone();
         let is_updating = self.is_updating.clone();
         let has_pending = self.has_pending.clone();
+        let bank_revision = self.bank_revision.clone();
         let history_revision = self.history_revision.clone();
         let commit_gate = self.commit_gate.clone();
         let last_failure_at_ms = self.last_failure_at_ms.clone();
@@ -550,28 +671,42 @@ impl PersistentMemorySystem {
                 return;
             }
 
-            // 全部成功：在同一个提交门内复核版本、写回、推进指针并清失败状态。
+            // 全部成功：按统一的 gate → bank 顺序复核版本、写回、推进
+            // 指针并清失败状态。try_lock + yield 避免同步锁跨 await。
             let [st, lt, ui, pr] = results;
-            let sections = [st.unwrap(), lt.unwrap(), ui.unwrap(), pr.unwrap()];
-            let mut bank = mb.lock().await;
-            if !commit_update_if_current(
-                &commit_gate,
-                &history_revision,
-                expected_history_revision,
-                &mut bank,
-                sections,
-                target_idx,
-                &last_failure_at_ms,
-                &fail_count,
-                &has_pending,
-            ) {
+            let mut sections = Some([st.unwrap(), lt.unwrap(), ui.unwrap(), pr.unwrap()]);
+            let committed = loop {
+                let gate = commit_gate
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Ok(mut bank) = mb.try_lock() {
+                    let committed = commit_update_under_gate(
+                        &history_revision,
+                        expected_history_revision,
+                        &mut bank,
+                        sections
+                            .take()
+                            .expect("sections available for first commit attempt"),
+                        target_idx,
+                        &last_failure_at_ms,
+                        &fail_count,
+                        &has_pending,
+                        &bank_revision,
+                    );
+                    drop(bank);
+                    drop(gate);
+                    break committed;
+                }
+                drop(gate);
+                tokio::task::yield_now().await;
+            };
+            if !committed {
                 tracing::info!(
                     "MemoryBank: role_id={} 提交前历史版本已变化，丢弃过期压缩结果",
                     role_id
                 );
                 return;
             }
-            drop(bank);
             tracing::info!(
                 "MemoryBank: role_id={} 记忆库更新完成! 指针已移动至 {}",
                 role_id,
@@ -790,6 +925,7 @@ mod tests {
         let last_failure = AtomicU64::new(0);
         let failures = AtomicU32::new(0);
         let pending = AtomicBool::new(false);
+        let bank_revision = AtomicU64::new(0);
         let mut bank = GameMemoryBank::default();
         let original = bank.clone();
 
@@ -803,8 +939,8 @@ mod tests {
         assert_eq!(last_failure.load(Ordering::Acquire), 0);
         assert_eq!(failures.load(Ordering::Acquire), 0);
 
-        assert!(!commit_update_if_current(
-            &gate,
+        let _gate = gate.lock().unwrap();
+        assert!(!commit_update_under_gate(
             &revision,
             1,
             &mut bank,
@@ -813,6 +949,7 @@ mod tests {
             &last_failure,
             &failures,
             &pending,
+            &bank_revision,
         ));
         assert_eq!(bank, original);
         assert!(!pending.load(Ordering::Acquire));
@@ -825,10 +962,11 @@ mod tests {
         let last_failure = AtomicU64::new(42);
         let failures = AtomicU32::new(2);
         let pending = AtomicBool::new(false);
+        let bank_revision = AtomicU64::new(0);
         let mut bank = GameMemoryBank::default();
 
-        assert!(commit_update_if_current(
-            &gate,
+        let _gate = gate.lock().unwrap();
+        assert!(commit_update_under_gate(
             &revision,
             3,
             &mut bank,
@@ -837,6 +975,7 @@ mod tests {
             &last_failure,
             &failures,
             &pending,
+            &bank_revision,
         ));
         assert_eq!(bank.data.short_term, "st");
         assert_eq!(bank.data.long_term, "lt");
@@ -846,6 +985,7 @@ mod tests {
         assert_eq!(last_failure.load(Ordering::Acquire), 0);
         assert_eq!(failures.load(Ordering::Acquire), 0);
         assert!(pending.load(Ordering::Acquire));
+        assert_eq!(bank_revision.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -855,5 +995,52 @@ mod tests {
             let _guard = UpdatingGuard(flag.clone());
         }
         assert!(!flag.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn rewrite_before_processed_prefix_resets_bank_and_invalidates_history() {
+        let mut bank = GameMemoryBank::default();
+        bank.data.long_term = "old event".to_string();
+        bank.meta.last_processed_global_idx = 4;
+        let llm: LlmSlot = Arc::new(RwLock::new(None));
+        let memory = PersistentMemorySystem::new(
+            7,
+            &bank,
+            llm,
+            true,
+            250,
+            0,
+            MemorySectionLimits::default(),
+            "AI",
+        );
+        let before_revision = memory.bank_revision();
+        memory.rewrite_from(2).await;
+        let snapshot = memory.snapshot().await;
+        assert_eq!(snapshot.bank, GameMemoryBank::default());
+        assert_eq!(snapshot.revision, before_revision + 1);
+        assert_eq!(memory.history_revision_for_test(), 1);
+    }
+
+    #[tokio::test]
+    async fn rewrite_at_processed_boundary_keeps_valid_bank_but_invalidates_task() {
+        let mut bank = GameMemoryBank::default();
+        bank.data.long_term = "valid prefix".to_string();
+        bank.meta.last_processed_global_idx = 4;
+        let llm: LlmSlot = Arc::new(RwLock::new(None));
+        let memory = PersistentMemorySystem::new(
+            7,
+            &bank,
+            llm,
+            true,
+            250,
+            0,
+            MemorySectionLimits::default(),
+            "AI",
+        );
+        memory.rewrite_from(4).await;
+        let snapshot = memory.snapshot().await;
+        assert_eq!(snapshot.bank, bank);
+        assert_eq!(snapshot.revision, 0);
+        assert_eq!(memory.history_revision_for_test(), 1);
     }
 }

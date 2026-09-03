@@ -148,7 +148,7 @@ impl AIService {
 
     pub async fn init_game_status(&mut self) -> Result<()> {
         let mut gs = self.game_status.lock().await;
-        gs.role_manager.invalidate_memory_history();
+        gs.role_manager.rewrite_memory_history(0).await;
         gs.role_manager.reset_roles();
         gs.line_list.clear();
         gs.onstage_role_ids.clear();
@@ -203,6 +203,10 @@ impl AIService {
     ) -> Result<()> {
         {
             let mut gs = self.game_status.lock().await;
+            // The bank was restored for this save immediately before loading
+            // lines. Invalidate any in-flight job, but retain the restored bank
+            // and its processed pointer; this replacement is not a destructive
+            // rewrite of an already loaded save.
             gs.role_manager.invalidate_memory_history();
             gs.line_list = lines;
             if let Some(sid) = save_id {
@@ -218,7 +222,7 @@ impl AIService {
 
     /// 将当前所有已加载角色的 `GameMemoryBank` 持久化到 DB。
     /// 委托给 `GameRoleManager` 以确保后台压缩结果先同步再写入。
-    pub async fn persist_memory_banks(&mut self, save_id: i32) -> Result<()> {
+    pub async fn persist_memory_banks(&mut self, save_id: i32) -> Result<Vec<(i32, u64)>> {
         self.game_status
             .lock()
             .await
@@ -240,7 +244,7 @@ impl AIService {
     /// 轻量清理：只清空台词 + 主角短期记忆，NPC 记忆保留。
     pub async fn clear_lines(&mut self) -> Result<()> {
         let mut gs = self.game_status.lock().await;
-        gs.role_manager.invalidate_memory_history();
+        gs.role_manager.rewrite_memory_history(0).await;
         gs.line_list.clear();
 
         let system_line = LineBase {

@@ -1546,6 +1546,10 @@ impl PreviewSession {
         let main_id = resolve_preview_main_role(db, game_status, script).await?;
 
         let mut gs = game_status.lock().await;
+        // Preview never starts permanent-memory compression; entering also
+        // invalidates any normal-session job that could finish during preview.
+        gs.role_manager.set_memory_preview(true);
+        gs.role_manager.invalidate_memory_history();
         // 递增试玩代号：本场次的生成管线捕获新代号；上一场被中止后仍在排空的
         // 游离流式任务持有旧代号，此后写入会被 add_assistant_line 的守卫丢弃。
         gs.preview_generation = gs.preview_generation.wrapping_add(1);
@@ -1565,7 +1569,8 @@ impl PreviewSession {
         // 失败时把已拍快照套回去再报错：否则试玩启动失败也会把自由对话的
         // 在场角色/台词表留在被清空的状态。
         if let Err(e) = gs.get_role(db, main_id).await {
-            gs.role_manager.invalidate_memory_history();
+            gs.role_manager.set_memory_preview(false);
+            gs.role_manager.rewrite_memory_history(saved.line_len).await;
             gs.line_list.truncate(saved.line_len);
             gs.apply_snapshot(&saved.scene);
             gs.main_role_id = saved.main_role_id;
@@ -1624,7 +1629,8 @@ impl PreviewSession {
         // 立即过期，它们的迟到写入会被 add_assistant_line 的守卫丢弃，不再
         // 污染已还原的自由对话会话。
         gs.preview_generation = gs.preview_generation.wrapping_add(1);
-        gs.role_manager.invalidate_memory_history();
+        gs.role_manager.set_memory_preview(false);
+        gs.role_manager.rewrite_memory_history(self.line_len).await;
         gs.line_list.truncate(self.line_len);
         gs.apply_snapshot(&self.scene);
         gs.main_role_id = self.main_role_id;

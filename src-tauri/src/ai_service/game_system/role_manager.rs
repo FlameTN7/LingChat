@@ -41,6 +41,8 @@ pub struct GameRoleManager {
     memory_recent_window: u32,
     /// 各记忆段长度上限（来自 `AppConfig::memory_*_max_chars`），透传给压缩系统。
     memory_limits: MemorySectionLimits,
+    /// 试玩期间只重建上下文，不启动永久记忆压缩任务。
+    memory_preview: bool,
     /// 角色服装覆盖（session store → register_role_by_id 时优先读取）
     clothes_overrides: HashMap<i32, String>,
 }
@@ -67,6 +69,7 @@ impl GameRoleManager {
             memory_update_interval,
             memory_recent_window,
             memory_limits,
+            memory_preview: false,
             clothes_overrides: HashMap::new(),
         }
     }
@@ -281,6 +284,19 @@ impl GameRoleManager {
             }
         }
 
+        // A full history refresh (used after load/rewrite) must also clear stale
+        // contexts for loaded roles no longer mentioned by the current history.
+        if recent_n.is_none() {
+            let loaded_ids: Vec<i32> = self.loaded_roles.keys().copied().collect();
+            for rid in loaded_ids {
+                if !involved_ids.contains(&rid) {
+                    if let Some(role) = self.loaded_roles.get_mut(&rid) {
+                        role.memory.clear();
+                    }
+                }
+            }
+        }
+
         for rid in involved_ids {
             // 保证角色已加载
             let _ = self.get_role(db, rid).await?;
@@ -315,7 +331,9 @@ impl GameRoleManager {
                         if let Some(role) = self.loaded_roles.get_mut(&rid) {
                             s.sync_to_role(role);
                         }
-                        s.check_and_trigger_auto_update(source_lines);
+                        if !self.memory_preview {
+                            s.check_and_trigger_auto_update(source_lines);
+                        }
                         let start = s.get_slice_start_index(source_lines).await;
                         let sys_text = s.get_system_memory_text().await;
                         let short = s.get_short_term_user_text().await;
@@ -366,10 +384,23 @@ impl GameRoleManager {
 
     // ── MemoryBank 集成方法 ──
 
+    /// 暂停或恢复试玩期间的永久记忆后台压缩。
+    pub fn set_memory_preview(&mut self, preview: bool) {
+        self.memory_preview = preview;
+    }
+
     /// 台词历史即将重建；让所有进行中的摘要任务在提交时自动作废。
     pub fn invalidate_memory_history(&self) {
         for system in self.memory_bank_systems.values() {
             system.invalidate_history();
+        }
+    }
+
+    /// Apply a history rewrite to every loaded memory runtime. Rewrites before
+    /// an already processed prefix reset that bank; appends must not call this.
+    pub async fn rewrite_memory_history(&self, from_idx: usize) {
+        for system in self.memory_bank_systems.values() {
+            system.rewrite_from(from_idx).await;
         }
     }
 
@@ -423,64 +454,72 @@ impl GameRoleManager {
     ) -> Result<()> {
         let memories = MemoryRepo::get_memories(db, save_id, None).await?;
 
-        // 每个 role 取最新（id 最大）的记录
-        let mut best: HashMap<i32, (i32, serde_json::Value)> = HashMap::new();
+        // 每个 role 取最新（id 最大）的记录，并在任何运行时状态变更前完成解析。
+        let mut best: HashMap<i32, (i32, GameMemoryBank)> = HashMap::new();
         for m in &memories {
             let Some(rid) = m.role_id else { continue };
             let mid = m.id;
             if !best.contains_key(&rid) || mid > best[&rid].0 {
-                best.insert(
-                    rid,
-                    (mid, serde_json::from_str(&m.info).unwrap_or_default()),
-                );
+                let bank = serde_json::from_str::<GameMemoryBank>(&m.info).map_err(|e| {
+                    anyhow!(
+                        "MemoryBank 数据损坏: save_id={}, role_id={}, memory_bank.id={}, error={}",
+                        save_id,
+                        rid,
+                        mid,
+                        e
+                    )
+                })?;
+                best.insert(rid, (mid, bank));
             }
         }
 
-        let target_ids: Vec<i32> = match role_ids {
+        // 未指定角色时，当前会话中的角色也必须纳入目标集合；否则新存档缺少
+        // 某角色时旧 bank 会泄漏到新会话。
+        let mut target_ids: Vec<i32> = match role_ids {
             Some(ids) => ids.to_vec(),
-            None => best.keys().copied().collect(),
+            None => self
+                .loaded_roles
+                .keys()
+                .chain(best.keys())
+                .copied()
+                .collect(),
         };
+        target_ids.sort_unstable();
+        target_ids.dedup();
 
         for rid in target_ids {
+            let bank = best
+                .get(&rid)
+                .map(|(_, bank)| bank.clone())
+                .unwrap_or_default();
             let _ = self.get_role(db, rid).await?;
 
-            // 更新 role.memory_bank（DB → 内存）
-            if let Some((_, info)) = best.get(&rid) {
-                if let Ok(mb) = serde_json::from_value::<GameMemoryBank>(info.clone()) {
-                    if let Some(role) = self.loaded_roles.get_mut(&rid) {
-                        role.memory_bank = mb.clone();
-                    }
-                }
+            // 缺少 DB 行时明确重置，而不是保留前一个存档的旧值。
+            if let Some(role) = self.loaded_roles.get_mut(&rid) {
+                role.memory_bank = bank.clone();
+                // Rebuild context from the newly loaded history for every role,
+                // including roles absent from that history; otherwise an old
+                // role.memory can leak into the new save.
+                role.memory.clear();
             }
 
-            // 提取数据（释放借用后传递给 ensure）
-            let (bank, display_name, enabled) = {
-                let role = self.loaded_roles.get(&rid).expect("角色刚刚加载");
-                (
-                    role.memory_bank.clone(),
-                    role.display_name
-                        .clone()
-                        .unwrap_or_else(|| "AI".to_string()),
-                    self.use_persistent_memory,
-                )
-            };
+            let display_name = self
+                .loaded_roles
+                .get(&rid)
+                .and_then(|role| role.display_name.clone())
+                .unwrap_or_else(|| "AI".to_string());
             self.ensure_memory_bank_system(
                 rid,
                 &bank,
                 &display_name,
-                enabled,
+                self.use_persistent_memory,
                 self.memory_update_interval as usize,
                 self.memory_recent_window as usize,
                 self.memory_limits,
             );
 
-            // 若已有压缩系统且 DB 有数据，同步重置
-            if let Some((_, info)) = best.get(&rid) {
-                if let Ok(mb) = serde_json::from_value::<GameMemoryBank>(info.clone()) {
-                    if let Some(sys) = self.memory_bank_systems.get(&rid) {
-                        sys.reset_from(&mb).await;
-                    }
-                }
+            if let Some(sys) = self.memory_bank_systems.get(&rid) {
+                sys.reset_from(&bank).await;
             }
         }
         Ok(())
@@ -577,28 +616,39 @@ impl GameRoleManager {
         db: &DatabaseConnection,
         save_id: i32,
         role_ids: Option<&[i32]>,
-    ) -> Result<()> {
-        // 先同步所有压缩系统的最新状态
-        for rid in self.loaded_roles.keys().copied().collect::<Vec<_>>() {
-            if let Some(sys) = self.memory_bank_systems.get(&rid) {
-                if let Some(role) = self.loaded_roles.get_mut(&rid) {
-                    sys.sync_to_role(role);
-                }
-            }
-        }
-
-        let target_ids: Vec<i32> = match role_ids {
+    ) -> Result<Vec<(i32, u64)>> {
+        // 先按稳定顺序捕获一次不可变快照；之后的 DB 写入不再读取 runtime 或
+        // GameRole 镜像，避免后台提交恰好发生在同步与序列化之间时保存旧值。
+        let mut target_ids: Vec<i32> = match role_ids {
             Some(ids) => ids.to_vec(),
             None => self.loaded_roles.keys().copied().collect(),
         };
+        target_ids.sort_unstable();
+        target_ids.dedup();
 
+        let mut snapshots = Vec::with_capacity(target_ids.len());
         for rid in target_ids {
-            if let Some(role) = self.loaded_roles.get(&rid) {
-                let info = serde_json::to_string(&role.memory_bank)?;
-                MemoryRepo::upsert_memory(db, save_id, rid, &info, None).await?;
+            let snapshot = if let Some(sys) = self.memory_bank_systems.get(&rid) {
+                let snapshot = sys.snapshot().await;
+                Some((snapshot.bank, snapshot.revision))
+            } else {
+                self.loaded_roles
+                    .get(&rid)
+                    .map(|role| (role.memory_bank.clone(), 0))
+            };
+            if let Some((bank, revision)) = snapshot {
+                snapshots.push((rid, bank, revision));
             }
         }
-        Ok(())
+
+        for (rid, bank, _) in &snapshots {
+            let info = serde_json::to_string(bank)?;
+            MemoryRepo::upsert_memory(db, save_id, *rid, &info, None).await?;
+        }
+        Ok(snapshots
+            .into_iter()
+            .map(|(role_id, _, revision)| (role_id, revision))
+            .collect())
     }
 
     /// 将 MemoryBank 文本合并到 LLM 消息中。
@@ -672,6 +722,25 @@ impl GameRoleManager {
     /// 提供给 memory_builder 之外的工具：把 `memory` 合并成 `[{role,content}, ...]` 的 serde 形式。
     pub fn memory_as_json(&self, role_id: i32) -> Option<Vec<LlmMessage>> {
         self.loaded_roles.get(&role_id).map(|r| r.memory.clone())
+    }
+
+    /// 返回按 role_id 排序的 MemoryBank 运行时 revision，用于保存层指纹。
+    pub fn memory_bank_revisions(&self) -> Vec<(i32, u64)> {
+        let mut revisions: Vec<(i32, u64)> = self
+            .loaded_roles
+            .keys()
+            .copied()
+            .map(|role_id| {
+                let revision = self
+                    .memory_bank_systems
+                    .get(&role_id)
+                    .map(PersistentMemorySystem::bank_revision)
+                    .unwrap_or(0);
+                (role_id, revision)
+            })
+            .collect();
+        revisions.sort_unstable_by_key(|(role_id, _)| *role_id);
+        revisions
     }
 }
 

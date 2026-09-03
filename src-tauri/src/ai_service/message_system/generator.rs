@@ -73,12 +73,8 @@ pub struct GeneratorDeps {
 
 /// `process_message` 各步骤间传递的用户消息上下文。
 struct UserMessageContext {
-    /// 处理后的完整消息（含 temp 段）。
-    processed: String,
-    /// 临时消息段（如有）。
+    /// 仅供本轮 LLM context 使用的临时消息段（如有）。
     temp: Option<String>,
-    /// 插入的用户行在 line_list 中的索引。
-    line_index: Option<usize>,
     /// 用户消息序号（1-indexed，按 sender_role_id==0 且 User 属性计数）。
     seq: Option<u32>,
 }
@@ -117,7 +113,10 @@ impl MessageGenerator {
 
         loop {
             // 取当前角色记忆（每轮重新获取，因为 current_role_id 可能已变化）
-            let context = self.get_current_context().await?;
+            let mut context = self.get_current_context().await?;
+            if consecutive_npc_rounds == 0 {
+                Self::apply_temp_overlay(&mut context, user_ctx.temp.as_deref());
+            }
             if context.is_empty() {
                 break;
             }
@@ -132,11 +131,6 @@ impl MessageGenerator {
                 .execute_pipeline(context, &original_msg, round_msg_seq)
                 .await?;
             accumulated.push_str(&round_acc);
-
-            // 后处理：仅第一轮清理 temp_message
-            if consecutive_npc_rounds == 0 {
-                self.cleanup_temp_message(&user_ctx).await?;
-            }
 
             consecutive_npc_rounds += 1;
 
@@ -173,26 +167,27 @@ impl MessageGenerator {
     async fn handle_user_message(&self, raw: Option<&str>) -> Result<UserMessageContext> {
         let Some(raw) = raw else {
             return Ok(UserMessageContext {
-                processed: String::new(),
                 temp: None,
-                line_index: None,
                 seq: None,
             });
         };
 
         let UserMessageOutcome { main, temp } = self.deps.processor.append_user_message(raw).await;
+        // Temporary instructions are an overlay for this LLM turn only. Keep
+        // them out of canonical line history so compression and DB persistence
+        // can never observe data that is supposed to be ephemeral.
+        let persistent_main = main;
 
         let mut gs = self.deps.game_status.lock().await;
         let user_name = gs.player.user_name.clone();
         let line = LineBase {
-            content: main.clone(),
+            content: persistent_main.clone(),
             attribute: LineAttributeExt(LineAttribute::User),
             display_name: Some(user_name),
             sender_role_id: Some(0),
             ..Default::default()
         };
         gs.add_line(&self.deps.db, line).await?;
-        let line_index = Some(gs.line_list.len().saturating_sub(1));
         let seq = Some(
             gs.line_list
                 .iter()
@@ -202,12 +197,7 @@ impl MessageGenerator {
                 .count() as u32,
         );
 
-        Ok(UserMessageContext {
-            processed: main,
-            temp,
-            line_index,
-            seq,
-        })
+        Ok(UserMessageContext { temp, seq })
     }
 
     /// Step 1.5: 检测场景变化，若场景切换则添加系统旁白台词。
@@ -284,18 +274,23 @@ impl MessageGenerator {
         }
     }
 
-    /// Step 4: 后处理 — 若存在 temp_message，将 user 行中的 temp 段清理后重建记忆。
-    async fn cleanup_temp_message(&self, ctx: &UserMessageContext) -> Result<()> {
-        let (Some(temp), Some(idx)) = (ctx.temp.as_deref(), ctx.line_index) else {
-            return Ok(());
+    /// Add an ephemeral instruction to the cloned context for this turn only.
+    fn apply_temp_overlay(context: &mut Vec<LlmMessage>, temp: Option<&str>) {
+        let Some(temp) = temp.filter(|value| !value.trim().is_empty()) else {
+            return;
         };
-        let mut gs = self.deps.game_status.lock().await;
-        gs.role_manager.invalidate_memory_history();
-        if let Some(line) = gs.line_list.get_mut(idx) {
-            line.base.content = ctx.processed.replace(temp, "");
+        let overlay = format!("\n系统提醒: {}", temp);
+        if let Some(message) = context
+            .iter_mut()
+            .rev()
+            .find(|message| message.role == "user")
+        {
+            if !message.content.contains(&overlay) {
+                message.content.push_str(&overlay);
+            }
+        } else {
+            context.push(LlmMessage::user(overlay));
         }
-        gs.refresh_memories(&self.deps.db).await?;
-        Ok(())
     }
 
     // ============================================================
@@ -550,8 +545,8 @@ impl MessageGenerator {
             let mut gs = self.deps.game_status.lock().await;
             // 试玩代号守卫：试玩中止后丢弃迟到回填，与 add_assistant_line 行为一致
             if gs.preview_generation == self.deps.generation {
-                gs.role_manager.invalidate_memory_history();
                 let insert_pos = tool_insert_pos.min(gs.line_list.len());
+                gs.role_manager.rewrite_memory_history(insert_pos).await;
                 let perceived: Vec<i32> = gs.present_role_ids.iter().copied().collect();
 
                 for msg in tool_msgs.iter().rev() {

@@ -284,8 +284,9 @@ pub async fn rollback_conversation(
             })
             .ok_or_else(|| format!("未找到序号为 {} 的用户消息", message_seq))?;
 
-        // truncate(idx) 移除 idx..len（含目标消息及之后所有内容）
-        gs.role_manager.invalidate_memory_history();
+        // truncate(idx) 移除 idx..len（含目标消息及之后所有内容）。
+        // 这是 rewrite，不是 append：已归档前缀被截断时必须丢弃旧摘要。
+        gs.role_manager.rewrite_memory_history(idx).await;
         gs.line_list.truncate(idx);
         gs.refresh_memories(&db)
             .await

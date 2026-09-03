@@ -60,10 +60,25 @@ impl MemoryRepo {
         memory_id: Option<i32>,
     ) -> Result<memory_bank::Model, anyhow::Error> {
         let existing: Option<memory_bank::Model> = if let Some(mid) = memory_id {
-            memory_bank::Entity::find_by_id(mid)
+            let model = memory_bank::Entity::find_by_id(mid)
                 .one(db)
                 .await
-                .map_err(|e| anyhow!(e))?
+                .map_err(|e| anyhow!(e))?;
+            if let Some(ref model) = model {
+                // A row id is not an ownership key. Never allow a caller to
+                // rewrite a memory belonging to another save or role.
+                if model.save_id != save_id || model.role_id != Some(role_id) {
+                    return Err(anyhow!(
+                        "memory row {} belongs to save_id={} role_id={:?}, not save_id={} role_id={}",
+                        mid,
+                        model.save_id,
+                        model.role_id,
+                        save_id,
+                        role_id
+                    ));
+                }
+            }
+            model
         } else {
             Self::get_latest_memory(db, save_id, role_id).await?
         };
