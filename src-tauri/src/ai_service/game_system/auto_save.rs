@@ -23,6 +23,22 @@ struct AutoSaveFingerprint {
     memory_revisions: Vec<(i32, u64)>,
 }
 
+fn fingerprint_requires_save(
+    last_save_id: Option<i32>,
+    last: Option<&AutoSaveFingerprint>,
+    save_id: i32,
+    current: &AutoSaveFingerprint,
+) -> bool {
+    last_save_id != Some(save_id) || last != Some(current)
+}
+
+fn successful_fingerprint(line_hash: u64, revisions: Vec<(i32, u64)>) -> AutoSaveFingerprint {
+    AutoSaveFingerprint {
+        line_hash,
+        memory_revisions: revisions,
+    }
+}
+
 /// Payload emitted to frontend after each successful auto-save.
 #[derive(Debug, Clone, Serialize)]
 struct AutoSaveEventPayload {
@@ -43,6 +59,10 @@ pub struct AutoSaveManager {
     /// Resolved auto-save slot ID (lazily found or created on first save).
     auto_save_id: Option<i32>,
 }
+
+#[cfg(test)]
+#[path = "../../../../test/memory/tests/auto_save.rs"]
+mod tests;
 
 impl AutoSaveManager {
     pub fn new(app: AppHandle, db: DatabaseConnection, ai_service: SharedAIService) -> Self {
@@ -130,9 +150,12 @@ impl AutoSaveManager {
 
         // 3. A completed memory compression changes this fingerprint even when
         // line_list is unchanged, so it cannot be skipped.
-        if self.last_saved_save_id == Some(save_id)
-            && self.last_saved_fingerprint.as_ref() == Some(&current_fingerprint)
-        {
+        if !fingerprint_requires_save(
+            self.last_saved_save_id,
+            self.last_saved_fingerprint.as_ref(),
+            save_id,
+            &current_fingerprint,
+        ) {
             return Ok(());
         }
 
@@ -187,10 +210,8 @@ impl AutoSaveManager {
         // 5. Update tracking state only after every required write above succeeds.
         // Replace memory revisions with the revisions captured by the successful
         // DB write; this is the exact snapshot represented by this save slot.
-        let saved_fingerprint = AutoSaveFingerprint {
-            line_hash: current_fingerprint.line_hash,
-            memory_revisions: saved_memory_revisions,
-        };
+        let saved_fingerprint =
+            successful_fingerprint(current_fingerprint.line_hash, saved_memory_revisions);
         self.last_saved_fingerprint = Some(saved_fingerprint);
         self.last_saved_save_id = Some(save_id);
 

@@ -19,6 +19,8 @@ pub struct ValidationResult {
     pub processed_idx: i64,
     pub tail_lines: usize,
     pub updating: bool,
+    pub system_memory: String,
+    pub short_term_memory: String,
 }
 
 fn lines(role_id: i32, count: usize) -> Vec<GameLine> {
@@ -43,10 +45,14 @@ pub async fn validate_real(
     provider: ScriptedProvider,
     initial_bank: GameMemoryBank,
     role_id: i32,
+    input_lines: Option<Vec<GameLine>>,
     line_count: usize,
     update_interval: usize,
+    recent_window: usize,
+    section_limits: MemorySectionLimits,
     timeout: Duration,
     append_during_update: bool,
+    rollback_during_update: bool,
 ) -> Result<ValidationResult> {
     let llm = provider.clone().slot();
     let memory = PersistentMemorySystem::new(
@@ -55,11 +61,11 @@ pub async fn validate_real(
         llm,
         true,
         update_interval,
-        0,
-        MemorySectionLimits::default(),
+        recent_window,
+        section_limits,
         "Test AI",
     );
-    let mut history = lines(role_id, line_count);
+    let mut history = input_lines.unwrap_or_else(|| lines(role_id, line_count));
     let target = history.len();
     memory.check_and_trigger_auto_update(&history);
     let triggered = {
@@ -75,8 +81,15 @@ pub async fn validate_real(
         }
     };
     if append_during_update && triggered {
-        // This append must remain after the target captured by the running job.
-        history.extend(lines(role_id, 1));
+        // The production path is GameStatus::add_line, which appends at the
+        // canonical tail without invalidating this captured target. The harness
+        // mirrors only that resulting history shape.
+        history.push(lines(role_id, 1).pop().expect("generated append line"));
+    }
+    if rollback_during_update && triggered {
+        // Rewrite invalidates the in-flight result; use the same production
+        // PersistentMemorySystem guard rather than a fake result override.
+        memory.rewrite_from(0).await;
     }
     let deadline = Instant::now() + timeout;
     while memory.is_updating() && Instant::now() < deadline {
@@ -99,6 +112,8 @@ pub async fn validate_real(
         processed_idx,
         tail_lines,
         updating: snapshot.updating,
+        system_memory: memory.get_system_memory_text().await,
+        short_term_memory: memory.get_short_term_user_text().await,
     })
 }
 
@@ -109,9 +124,13 @@ pub async fn validate_scripted(provider: &ScriptedProvider) -> Result<[String; 4
         provider.clone(),
         GameMemoryBank::default(),
         7,
+        None,
         4,
         1,
+        0,
+        MemorySectionLimits::default(),
         Duration::from_secs(5),
+        false,
         false,
     )
     .await

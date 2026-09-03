@@ -25,9 +25,14 @@ mod tests {
             provider,
             GameMemoryBank::default(),
             7,
+            None,
             4,
             1,
+            0,
+            crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits::default(
+            ),
             Duration::from_secs(5),
+            false,
             false,
         )
         .await
@@ -46,10 +51,15 @@ mod tests {
             },
             GameMemoryBank::default(),
             7,
+            None,
             4,
             1,
+            0,
+            crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits::default(
+            ),
             Duration::from_secs(5),
             true,
+            false,
         )
         .await
         .unwrap();

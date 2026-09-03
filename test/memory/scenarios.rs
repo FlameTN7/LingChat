@@ -6,6 +6,7 @@ pub const SCENARIOS: &[&str] = &[
     "one-section-fails",
     "empty-section-fails",
     "persistence-roundtrip",
+    "stale-on-rollback",
     "memory-finishes-after-line-save",
 ];
 

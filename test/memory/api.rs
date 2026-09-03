@@ -15,7 +15,8 @@ use tokio::sync::oneshot;
 use super::harness::validate_real;
 use super::scenarios;
 use super::scripted_provider::ScriptedProvider;
-use crate::ai_service::types::GameMemoryBank;
+use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
+use crate::ai_service::types::{GameLine, GameMemoryBank};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -43,10 +44,17 @@ pub struct ValidateRequest {
     pub display_name: String,
     #[serde(default)]
     pub initial_bank: GameMemoryBank,
+    /// Explicit canonical history. `line_count` remains a compact fixture shortcut.
+    #[serde(default)]
+    pub lines: Vec<GameLine>,
     #[serde(default = "default_line_count")]
     pub line_count: usize,
     #[serde(default = "default_update_interval")]
     pub update_interval: usize,
+    #[serde(default)]
+    pub recent_window: usize,
+    #[serde(default)]
+    pub section_limits: Option<MemorySectionLimitsRequest>,
     #[serde(default)]
     pub delay_ms: u64,
     #[serde(default)]
@@ -60,7 +68,36 @@ pub struct ValidateRequest {
     #[serde(default)]
     pub append_during_update: bool,
     #[serde(default)]
+    pub rollback_during_update: bool,
+    #[serde(default)]
     pub persistence_roundtrip: bool,
+    #[serde(default)]
+    pub wait_for_completion: bool,
+    #[serde(default)]
+    pub database: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct MemorySectionLimitsRequest {
+    #[serde(default)]
+    pub short_term: usize,
+    #[serde(default)]
+    pub long_term: usize,
+    #[serde(default)]
+    pub user_info: usize,
+    #[serde(default)]
+    pub promises: usize,
+}
+
+impl From<Option<MemorySectionLimitsRequest>> for MemorySectionLimits {
+    fn from(value: Option<MemorySectionLimitsRequest>) -> Self {
+        value.map_or_else(Self::default, |limits| Self {
+            short_term: limits.short_term,
+            long_term: limits.long_term,
+            user_info: limits.user_info,
+            promises: limits.promises,
+        })
+    }
 }
 
 fn default_role_id() -> i32 {
@@ -91,6 +128,10 @@ pub struct ValidateResponse {
     pub unprocessed_tail_lines: usize,
     pub updating: bool,
     pub persistence_roundtrip: Option<bool>,
+    pub persistence_result: Option<String>,
+    pub system_memory: String,
+    pub short_term_memory: String,
+    pub duration_ms: u128,
     pub error_code: Option<String>,
 }
 
@@ -201,6 +242,14 @@ async fn validate_inner(
     }
     if request.scenario == "persistence-roundtrip" {
         request.persistence_roundtrip = true;
+        request.database = true;
+    }
+    if request.scenario == "memory-finishes-after-line-save" {
+        request.database = true;
+        request.wait_for_completion = true;
+    }
+    if request.scenario == "stale-on-rollback" {
+        request.rollback_during_update = true;
     }
     if request.role_id <= 0 {
         return (
@@ -252,6 +301,13 @@ async fn validate_inner(
     let failed = request.fail_section.is_some()
         || request.empty_section.is_some()
         || request.panic_section.is_some();
+    if request.lines.len() > 10_000 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error":"too_many_lines"})),
+        )
+            .into_response();
+    }
     let provider = ScriptedProvider {
         delay_ms: request.delay_ms,
         fail_section: request.fail_section.clone(),
@@ -260,39 +316,62 @@ async fn validate_inner(
         ..Default::default()
     };
     let timeout = Duration::from_millis(request.timeout_ms);
+    let started = std::time::Instant::now();
+    let requested_line_count = request.lines.len().max(request.line_count);
+    let lines = if request.lines.is_empty() {
+        None
+    } else {
+        Some(request.lines)
+    };
     let run = validate_real(
         provider.clone(),
         request.initial_bank,
         request.role_id,
+        lines,
         request.line_count,
         request.update_interval,
+        request.recent_window,
+        request.section_limits.into(),
         timeout,
         request.append_during_update,
+        request.rollback_during_update,
     );
     let result = tokio::time::timeout(timeout, run).await;
+    let duration_ms = started.elapsed().as_millis();
     match result {
         Ok(Ok(result)) => {
             let mut persistence_roundtrip = None;
             let mut persistence_error = None;
-            if request.persistence_roundtrip && result.committed {
+            if (request.persistence_roundtrip || request.database) && result.committed {
                 match super::temp_db::TemporaryDatabase::open().await {
                     Ok(db) => match db
                         .seed_save_role(request.role_id, &request.display_name)
                         .await
                     {
-                        Ok((save_id, role_id)) => match db
-                            .round_trip(save_id, role_id, &result.bank)
-                            .await
-                        {
-                            Ok(loaded) if loaded == result.bank => {
-                                persistence_roundtrip = Some(true)
-                            },
-                            Ok(_) => persistence_error = Some("round-trip bank mismatch".into()),
-                            Err(error) => persistence_error = Some(error.to_string()),
+                        Ok((save_id, role_id)) => {
+                            match db.round_trip(save_id, role_id, &result.bank).await {
+                                Ok(loaded) if loaded == result.bank => {
+                                    persistence_roundtrip = Some(true)
+                                },
+                                Ok(_) => {
+                                    persistence_roundtrip = Some(false);
+                                    persistence_error = Some("round-trip bank mismatch".into())
+                                },
+                                Err(error) => {
+                                    persistence_roundtrip = Some(false);
+                                    persistence_error = Some(error.to_string())
+                                },
+                            }
                         },
-                        Err(error) => persistence_error = Some(error.to_string()),
+                        Err(error) => {
+                            persistence_roundtrip = Some(false);
+                            persistence_error = Some(error.to_string())
+                        },
                     },
-                    Err(error) => persistence_error = Some(error.to_string()),
+                    Err(error) => {
+                        persistence_roundtrip = Some(false);
+                        persistence_error = Some(error.to_string())
+                    },
                 }
             }
             let outcome = if failed {
@@ -315,6 +394,16 @@ async fn validate_inner(
                 unprocessed_tail_lines: result.tail_lines,
                 updating: result.updating,
                 persistence_roundtrip,
+                persistence_result: persistence_roundtrip.map(|ok| {
+                    if ok {
+                        "saved_and_loaded".into()
+                    } else {
+                        "failed".into()
+                    }
+                }),
+                system_memory: result.system_memory,
+                short_term_memory: result.short_term_memory,
+                duration_ms,
                 error_code: if failed {
                     Some("compression_failed".into())
                 } else {
@@ -331,9 +420,13 @@ async fn validate_inner(
             calls: provider.calls(),
             bank: GameMemoryBank::default(),
             last_processed_global_idx: 0,
-            unprocessed_tail_lines: request.line_count,
+            unprocessed_tail_lines: requested_line_count,
             updating: false,
             persistence_roundtrip: None,
+            persistence_result: None,
+            system_memory: String::new(),
+            short_term_memory: String::new(),
+            duration_ms,
             error_code: Some("validation_failed".into()),
         })
         .into_response(),
