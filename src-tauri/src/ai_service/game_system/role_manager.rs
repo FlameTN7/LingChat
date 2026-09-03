@@ -454,22 +454,14 @@ impl GameRoleManager {
     ) -> Result<()> {
         let memories = MemoryRepo::get_memories(db, save_id, None).await?;
 
-        // 每个 role 取最新（id 最大）的记录，并在任何运行时状态变更前完成解析。
-        let mut best: HashMap<i32, (i32, GameMemoryBank)> = HashMap::new();
+        // 先按 id 选择每个 role 的最新记录，再只解析被选中的行。
+        // 旧重复行可能包含坏 JSON，但既有兼容语义是取最大 id，不能让旧行
+        // 在选择完成前阻断有效的新行。
+        let mut best: HashMap<i32, &crate::db::entities::memory_bank::Model> = HashMap::new();
         for m in &memories {
             let Some(rid) = m.role_id else { continue };
-            let mid = m.id;
-            if !best.contains_key(&rid) || mid > best[&rid].0 {
-                let bank = serde_json::from_str::<GameMemoryBank>(&m.info).map_err(|e| {
-                    anyhow!(
-                        "MemoryBank 数据损坏: save_id={}, role_id={}, memory_bank.id={}, error={}",
-                        save_id,
-                        rid,
-                        mid,
-                        e
-                    )
-                })?;
-                best.insert(rid, (mid, bank));
+            if best.get(&rid).map_or(true, |current| m.id > current.id) {
+                best.insert(rid, m);
             }
         }
 
@@ -488,10 +480,18 @@ impl GameRoleManager {
         target_ids.dedup();
 
         for rid in target_ids {
-            let bank = best
-                .get(&rid)
-                .map(|(_, bank)| bank.clone())
-                .unwrap_or_default();
+            let bank = match best.get(&rid) {
+                Some(row) => serde_json::from_str::<GameMemoryBank>(&row.info).map_err(|e| {
+                    anyhow!(
+                        "MemoryBank 数据损坏: save_id={}, role_id={}, memory_bank.id={}, error={}",
+                        save_id,
+                        rid,
+                        row.id,
+                        e
+                    )
+                })?,
+                None => GameMemoryBank::default(),
+            };
             let _ = self.get_role(db, rid).await?;
 
             // 缺少 DB 行时明确重置，而不是保留前一个存档的旧值。

@@ -34,12 +34,37 @@ mod tests {
             Duration::from_secs(5),
             false,
             false,
+            "Test AI",
         )
         .await
         .unwrap();
         assert!(!result.committed);
         assert_eq!(result.processed_idx, 0);
         assert_eq!(result.calls, 4);
+    }
+
+    #[tokio::test]
+    async fn display_name_reaches_production_compression_prompt() {
+        let provider = ScriptedProvider::default();
+        let result = validate_real(
+            provider.clone(),
+            GameMemoryBank::default(),
+            7,
+            None,
+            1,
+            1,
+            0,
+            crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits::default(
+            ),
+            Duration::from_secs(5),
+            false,
+            false,
+            "雪月花",
+        )
+        .await
+        .unwrap();
+        assert!(result.committed);
+        assert!(provider.saw_prompt_text("【角色名称】：雪月花"));
     }
 
     #[tokio::test]
@@ -60,11 +85,14 @@ mod tests {
             Duration::from_secs(5),
             true,
             false,
+            "Test AI",
         )
         .await
         .unwrap();
         assert!(result.committed);
-        assert_eq!(result.processed_idx, 4);
+        assert_eq!(result.first_processed_idx, 4);
+        assert!(result.second_batch_committed);
         assert_eq!(result.tail_lines, 1);
+        assert_eq!(result.calls, 8);
     }
 }

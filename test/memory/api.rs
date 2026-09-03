@@ -125,6 +125,8 @@ pub struct ValidateResponse {
     pub calls: usize,
     pub bank: GameMemoryBank,
     pub last_processed_global_idx: i64,
+    pub first_processed_global_idx: i64,
+    pub second_batch_committed: bool,
     pub unprocessed_tail_lines: usize,
     pub updating: bool,
     pub persistence_roundtrip: Option<bool>,
@@ -227,29 +229,86 @@ async fn validate_inner(
         )
             .into_response();
     }
-    // Built-in scenario names are executable behavior, not just a whitelist.
-    if request.scenario == "one-section-fails" && request.fail_section.is_none() {
-        request.fail_section = Some("promises".into());
-    }
-    if request.scenario == "empty-section-fails" && request.empty_section.is_none() {
-        request.empty_section = Some("promises".into());
-    }
-    if request.scenario == "append-during-update" {
-        request.append_during_update = true;
-        if request.delay_ms == 0 {
-            request.delay_ms = 10;
-        }
-    }
-    if request.scenario == "persistence-roundtrip" {
-        request.persistence_roundtrip = true;
-        request.database = true;
-    }
-    if request.scenario == "memory-finishes-after-line-save" {
-        request.database = true;
-        request.wait_for_completion = true;
-    }
-    if request.scenario == "stale-on-rollback" {
-        request.rollback_during_update = true;
+    // Built-in scenarios own their inputs. Request fields must not be able to
+    // turn a failure case into a successful run (or vice versa).
+    match request.scenario.as_str() {
+        "basic-compression" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = None;
+            request.append_during_update = false;
+            request.rollback_during_update = false;
+            request.persistence_roundtrip = false;
+            request.database = false;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
+        "append-during-update" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = None;
+            request.append_during_update = true;
+            request.rollback_during_update = false;
+            request.line_count = 4;
+            request.update_interval = 1;
+            request.delay_ms = request.delay_ms.max(10);
+        },
+        "one-section-fails" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = Some("promises".into());
+            request.empty_section = None;
+            request.panic_section = None;
+            request.append_during_update = false;
+            request.rollback_during_update = false;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
+        "empty-section-fails" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = Some("promises".into());
+            request.panic_section = None;
+            request.append_during_update = false;
+            request.rollback_during_update = false;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
+        "stale-on-rollback" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = None;
+            request.append_during_update = false;
+            request.rollback_during_update = true;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
+        "persistence-roundtrip" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = None;
+            request.persistence_roundtrip = true;
+            request.database = true;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
+        // AutoSave requires driving the application save manager and is
+        // deliberately deferred rather than reported as a DB round-trip.
+        "memory-finishes-after-line-save" => {
+            return (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(serde_json::json!({
+                    "error": "autosave_scenario_deferred",
+                    "outcome": "not_implemented",
+                    "next_phase": "real AutoSaveManager integration"
+                })),
+            )
+                .into_response();
+        },
+        _ => {},
     }
     if request.role_id <= 0 {
         return (
@@ -298,9 +357,6 @@ async fn validate_inner(
             .into_response();
     }
     let _busy_guard = BusyGuard(state.busy.clone());
-    let failed = request.fail_section.is_some()
-        || request.empty_section.is_some()
-        || request.panic_section.is_some();
     if request.lines.len() > 10_000 {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -317,7 +373,6 @@ async fn validate_inner(
     };
     let timeout = Duration::from_millis(request.timeout_ms);
     let started = std::time::Instant::now();
-    let requested_line_count = request.lines.len().max(request.line_count);
     let lines = if request.lines.is_empty() {
         None
     } else {
@@ -335,6 +390,7 @@ async fn validate_inner(
         timeout,
         request.append_during_update,
         request.rollback_during_update,
+        &request.display_name,
     );
     let result = tokio::time::timeout(timeout, run).await;
     let duration_ms = started.elapsed().as_millis();
@@ -374,15 +430,59 @@ async fn validate_inner(
                     },
                 }
             }
-            let outcome = if failed {
-                "not_committed"
-            } else if persistence_error.is_some() {
+            let outcome = if persistence_error.is_some() {
                 "persistence_failed"
             } else if result.committed {
                 "succeeded"
             } else {
                 "not_committed"
             };
+            // A built-in scenario is an executable contract. Never return a
+            // green HTTP response when its production-derived result violates
+            // the contract, and never manufacture outcome from request flags.
+            let valid = match request.scenario.as_str() {
+                "basic-compression" => result.triggered && result.committed && result.calls == 4,
+                "append-during-update" => {
+                    result.triggered
+                        && result.committed
+                        && result.first_processed_idx == 4
+                        && result.tail_lines == 1
+                        && result.second_batch_committed
+                        && result.calls == 8
+                },
+                "one-section-fails" | "empty-section-fails" => {
+                    result.triggered
+                        && !result.committed
+                        && result.processed_idx == 0
+                        && result.calls == 4
+                        && result.bank == GameMemoryBank::default()
+                },
+                "stale-on-rollback" => {
+                    result.triggered
+                        && !result.committed
+                        && result.processed_idx == 0
+                        && result.calls == 4
+                        && result.bank == GameMemoryBank::default()
+                },
+                "persistence-roundtrip" => {
+                    result.triggered && result.committed && persistence_roundtrip == Some(true)
+                },
+                _ => true,
+            };
+            if !valid {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "scenario_assertion_failed",
+                        "scenario": request.scenario,
+                        "outcome": outcome,
+                        "committed": result.committed,
+                        "calls": result.calls,
+                        "last_processed_global_idx": result.processed_idx
+                    })),
+                )
+                    .into_response();
+            }
             Json(ValidateResponse {
                 outcome: outcome.into(),
                 scenario: request.scenario,
@@ -391,6 +491,8 @@ async fn validate_inner(
                 calls: result.calls,
                 bank: result.bank,
                 last_processed_global_idx: result.processed_idx,
+                first_processed_global_idx: result.first_processed_idx,
+                second_batch_committed: result.second_batch_committed,
                 unprocessed_tail_lines: result.tail_lines,
                 updating: result.updating,
                 persistence_roundtrip,
@@ -404,37 +506,36 @@ async fn validate_inner(
                 system_memory: result.system_memory,
                 short_term_memory: result.short_term_memory,
                 duration_ms,
-                error_code: if failed {
-                    Some("compression_failed".into())
-                } else {
+                error_code: if result.committed {
                     persistence_error.map(|_| "persistence_failed".into())
+                } else {
+                    Some("compression_failed".into())
                 },
             })
             .into_response()
         },
-        Ok(Err(_error)) => Json(ValidateResponse {
-            outcome: "not_committed".into(),
-            scenario: request.scenario,
-            triggered: false,
-            committed: false,
-            calls: provider.calls(),
-            bank: GameMemoryBank::default(),
-            last_processed_global_idx: 0,
-            unprocessed_tail_lines: requested_line_count,
-            updating: false,
-            persistence_roundtrip: None,
-            persistence_result: None,
-            system_memory: String::new(),
-            short_term_memory: String::new(),
-            duration_ms,
-            error_code: Some("validation_failed".into()),
-        })
-        .into_response(),
-        Err(_) => (
-            StatusCode::REQUEST_TIMEOUT,
-            Json(serde_json::json!({"error":"timed_out","outcome":"timed_out"})),
-        )
-            .into_response(),
+        Ok(Err(error)) => {
+            provider.wait_idle().await;
+            // Do not manufacture a ValidationResult on harness failure. The
+            // caller receives a stable error response without a claimed
+            // outcome/commit state, and the single-flight guard is released.
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "validation_failed",
+                    "detail": error.to_string()
+                })),
+            )
+                .into_response()
+        },
+        Err(_) => {
+            provider.wait_idle().await;
+            (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(serde_json::json!({"error":"timed_out","outcome":"timed_out"})),
+            )
+                .into_response()
+        },
     }
 }
 

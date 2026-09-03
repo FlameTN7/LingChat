@@ -18,6 +18,17 @@ mod tests {
         assert_eq!(loaded, bank);
     }
 
+    #[test]
+    fn multilingual_fixture_matches_game_line_serde_contract() {
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("../../fixtures/memory/multilingual.json")).unwrap();
+        let line = value["lines"][0].clone();
+        let parsed: crate::ai_service::types::GameLine = serde_json::from_value(line).unwrap();
+        assert_eq!(parsed.base.content, "风雪说：你好，世界 🌏");
+        assert_eq!(parsed.base.attribute.as_str(), "user");
+        assert_eq!(value["display_name"], "测试角色");
+    }
+
     #[tokio::test]
     async fn malformed_memory_json_is_reported() {
         let db = TemporaryDatabase::open().await.unwrap();

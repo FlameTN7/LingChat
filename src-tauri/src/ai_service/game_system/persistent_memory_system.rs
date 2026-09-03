@@ -723,7 +723,7 @@ impl PersistentMemorySystem {
         key: &str,
         old_content: &str,
         max_chars: usize,
-        _ai_name: &str,
+        ai_name: &str,
     ) -> Result<String> {
         let prompt_req = match prompts.get(key) {
             Some(p) => p,
@@ -745,8 +745,8 @@ impl PersistentMemorySystem {
         }
 
         let full_prompt = format!(
-            "{}\n\n【旧内容】：\n{}\n\n【新增对话】：\n{}\n\n【新内容】(直接输出结果，不要废话)：",
-            prompt_req, old, chat_text,
+            "{}\n\n【角色名称】：{}\n【旧内容】：\n{}\n\n【新增对话】：\n{}\n\n【新内容】(直接输出结果，不要废话)：",
+            prompt_req, ai_name, old, chat_text,
         );
 
         let messages = vec![LlmMessage::user(full_prompt)];

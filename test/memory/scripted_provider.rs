@@ -24,6 +24,8 @@ pub struct ScriptedProvider {
     pub empty_section: Option<String>,
     pub panic_section: Option<String>,
     pub calls: Arc<AtomicUsize>,
+    pub(crate) active: Arc<AtomicUsize>,
+    pub(crate) prompts: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl ScriptedProvider {
@@ -42,6 +44,19 @@ impl ScriptedProvider {
 
     pub fn calls(&self) -> usize {
         self.calls.load(Ordering::Acquire)
+    }
+
+    pub async fn wait_idle(&self) {
+        while self.active.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    pub fn saw_prompt_text(&self, text: &str) -> bool {
+        self.prompts
+            .lock()
+            .map(|prompts| prompts.iter().any(|p| p.contains(text)))
+            .unwrap_or(false)
     }
 
     /// Build a real production LlmClient backed by this deterministic provider.
@@ -66,6 +81,13 @@ impl ScriptedProvider {
     }
 }
 
+struct ActiveCall(Arc<AtomicUsize>);
+impl Drop for ActiveCall {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[async_trait]
 impl LlmProvider for ScriptedProvider {
     async fn list_models(&self, _http: &Client) -> Result<Vec<LlmModelInfo>> {
@@ -74,6 +96,8 @@ impl LlmProvider for ScriptedProvider {
 
     async fn complete(&self, _http: &Client, messages: &[LlmMessage]) -> Result<String> {
         self.calls.fetch_add(1, Ordering::AcqRel);
+        self.active.fetch_add(1, Ordering::AcqRel);
+        let _active = ActiveCall(self.active.clone());
         if self.delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
         }
@@ -81,6 +105,9 @@ impl LlmProvider for ScriptedProvider {
             .last()
             .map(|m| m.content.as_str())
             .unwrap_or_default();
+        if let Ok(mut prompts) = self.prompts.lock() {
+            prompts.push(prompt.to_string());
+        }
         let section = if prompt.contains("短期上下文摘要") {
             "short_term"
         } else if prompt.contains("角色经历编年史") {

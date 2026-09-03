@@ -69,6 +69,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn built_in_failure_scenario_owns_fault_injection() {
+        let response = router(state())
+            .oneshot(
+                Request::post("/v1/scenarios/one-section-fails")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"fail_section":"not-a-real-section"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["outcome"], "not_committed");
+        assert_eq!(body["committed"], false);
+        assert_eq!(body["calls"], 4);
+        assert_eq!(body["last_processed_global_idx"], 0);
+    }
+
+    #[tokio::test]
+    async fn deferred_autosave_scenario_is_not_reported_as_roundtrip() {
+        let response = router(state())
+            .oneshot(
+                Request::post("/v1/scenarios/memory-finishes-after-line-save")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
     async fn concurrent_validation_returns_too_many_requests() {
         let app = router(state());
         let request = || {
