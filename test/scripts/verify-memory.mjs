@@ -17,7 +17,7 @@ const commit = (() => {
   return result.status === 0 ? result.stdout.trim() : "unknown";
 })();
 const fixturesDir = join(root, "test", "fixtures", "memory");
-const fixtureNames = ["basic.json", "append_during_update.json", "partial_failure.json", "rollback.json", "multilingual.json"];
+const fixtureNames = ["basic.json", "append_during_update.json", "partial_failure.json", "panic.json", "rollback.json", "multilingual.json"];
 const commandResults = [];
 // Keep report creation ahead of fixture execution: even a missing/corrupt
 // fixture must leave an explicit failed artifact instead of an old success.
@@ -111,7 +111,7 @@ try {
   const fixtureFor = {
     "basic-compression": "basic.json", "append-during-update": "append_during_update.json",
     "one-section-fails": "partial_failure.json", "empty-section-fails": "partial_failure.json",
-    "panic-compression": "partial_failure.json", "stale-on-rollback": "rollback.json",
+    "panic-compression": "panic.json", "stale-on-rollback": "rollback.json",
     "persistence-roundtrip": "basic.json",
     "memory-finishes-after-line-save": "basic.json",
   };
@@ -126,7 +126,8 @@ try {
     if (response.status !== 200) throw new Error(`${name}: HTTP ${response.status} ${JSON.stringify(body)}`);
     if (body.committed && body.outcome !== "succeeded") throw new Error(`${name}: committed outcome mismatch`);
     if (name === "basic-compression" && (body.outcome !== "succeeded" || body.calls !== 4 || !body.triggered)) throw new Error(`${name}: assertion failed`);
-    if (["one-section-fails", "empty-section-fails", "panic-compression", "stale-on-rollback"].includes(name) && (body.committed || body.outcome !== "not_committed" || body.calls !== 4 || body.last_processed_global_idx !== 0)) throw new Error(`${name}: rollback assertion failed`);
+    if (["one-section-fails", "empty-section-fails", "stale-on-rollback"].includes(name) && (body.committed || body.outcome !== "not_committed" || body.calls !== 4 || body.last_processed_global_idx !== 0)) throw new Error(`${name}: rollback assertion failed`);
+    if (name === "panic-compression" && (body.outcome !== "not_committed" || body.committed || body.calls !== 4 || body.last_processed_global_idx !== 0 || !body.triggered)) throw new Error(`${name}: panic rollback assertion failed`);
     if (name === "append-during-update" && (body.outcome !== "succeeded" || body.first_processed_global_idx !== 4 || body.unprocessed_tail_lines !== 1 || !body.second_batch_committed || body.calls !== 8)) throw new Error(`${name}: append assertion failed`);
     if (name === "persistence-roundtrip" && body.persistence_roundtrip !== true) throw new Error(`${name}: round-trip assertion failed`);
     if (name === "memory-finishes-after-line-save" && (body.outcome !== "succeeded" || body.persistence_roundtrip !== true || body.details?.persisted_last_processed_global_idx !== 2)) throw new Error(`${name}: late autosave assertion failed`);

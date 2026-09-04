@@ -62,7 +62,7 @@ pub struct AutoSaveManager {
     auto_save_id: Option<i32>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "memory-test-api"))]
 #[path = "../../../../test/memory/tests/auto_save.rs"]
 mod tests;
 

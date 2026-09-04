@@ -187,6 +187,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["outcome"], "not_committed");
+        assert_eq!(body["committed"], false);
+        assert_eq!(body["triggered"], true);
+        assert_eq!(body["calls"], 4);
+        assert_eq!(body["last_processed_global_idx"], 0);
         let response = app
             .oneshot(
                 Request::post("/v1/memory/validate")

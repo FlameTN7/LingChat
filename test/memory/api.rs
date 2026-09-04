@@ -281,6 +281,16 @@ async fn validate_inner(
             request.line_count = 4;
             request.update_interval = 1;
         },
+        "panic-compression" => {
+            request.initial_bank = GameMemoryBank::default();
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = Some("promises".into());
+            request.append_during_update = false;
+            request.rollback_during_update = false;
+            request.line_count = 4;
+            request.update_interval = 1;
+        },
         "stale-on-rollback" => {
             request.initial_bank = GameMemoryBank::default();
             request.fail_section = None;
@@ -507,6 +517,18 @@ async fn validate_inner(
                         && result.calls == 8
                 },
                 "one-section-fails" | "empty-section-fails" => {
+                    result.triggered
+                        && !result.committed
+                        && result.processed_idx == 0
+                        && result.calls == 4
+                        && result.bank == GameMemoryBank::default()
+                },
+                // This contract is deliberately separate from ordinary section
+                // failures: the built-in request above forces the provider to
+                // panic in the promises call, while the four-call/rollback
+                // assertions prove the panic was contained by the production
+                // task boundary and did not commit a partial bank.
+                "panic-compression" => {
                     result.triggered
                         && !result.committed
                         && result.processed_idx == 0
