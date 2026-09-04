@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::Result;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 
 use crate::ai_service::game_system::memory_builder::MemoryBuilder;
 use crate::ai_service::llm::{LlmClient, LlmSlot, slot_snapshot};
@@ -155,6 +155,9 @@ pub struct PersistentMemorySystem {
     section_limits: MemorySectionLimits,
 
     section_prompts: HashMap<String, String>,
+    /// Own the spawned compaction task so timeout/shutdown can terminate and
+    /// join it instead of releasing the caller's one-flight slot early.
+    task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 /// 可供保存层和诊断工具读取的不可变 MemoryBank 快照。
@@ -255,6 +258,7 @@ impl PersistentMemorySystem {
             recent_window,
             section_limits: limits,
             section_prompts: init_prompts(),
+            task: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -293,6 +297,76 @@ impl PersistentMemorySystem {
 
     pub fn is_updating(&self) -> bool {
         self.is_updating.load(Ordering::Acquire)
+    }
+
+    /// Wait until the owned compaction task has actually terminated. A caller
+    /// must use this rather than treating `is_updating == false` as sufficient:
+    /// the task can finish its guard cleanup just before its JoinHandle is joined.
+    fn task_is_empty(&self) -> bool {
+        self.task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_none()
+    }
+
+    fn take_finished_task(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let mut slot = self
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.as_ref().is_some_and(|handle| handle.is_finished()) {
+            slot.take()
+        } else {
+            None
+        }
+    }
+
+    pub async fn wait_until_idle(&self, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let handle = self.take_finished_task();
+            if let Some(handle) = handle {
+                let _ = handle.await;
+                continue;
+            }
+            if !self.is_updating() {
+                // A spawn/finish race may publish the handle after the flag is
+                // cleared; give that publication one scheduling opportunity.
+                tokio::task::yield_now().await;
+                if self.task_is_empty() && !self.is_updating() {
+                    return true;
+                }
+                continue;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    }
+
+    /// Abort the owned task and join it before releasing one-flight ownership.
+    pub async fn abort_and_wait(&self) {
+        let handle = {
+            let mut slot = self
+                .task
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.take()
+        };
+        if let Some(handle) = handle {
+            handle.abort();
+            let _ = handle.await;
+        }
+        // If abort wins before the task is first polled, its Drop guard was
+        // never constructed. Clear the ownership flag explicitly in addition
+        // to relying on the guard for the normal path.
+        self.is_updating.store(false, Ordering::Release);
+        // The abort path runs the guard's Drop, but wait for the observable
+        // flag as well so callers never race a subsequent trigger.
+        while self.is_updating() {
+            tokio::task::yield_now().await;
+        }
     }
 
     pub fn bank_revision(&self) -> u64 {
@@ -460,6 +534,11 @@ impl PersistentMemorySystem {
         if !self.enabled {
             return;
         }
+        // A completed task can clear `is_updating` just before its JoinHandle is
+        // reclaimed. Reclaim that handle synchronously before accepting a new
+        // trigger, so one-flight covers the task's complete lifecycle without
+        // retaining finished handles indefinitely.
+        let _ = self.take_finished_task();
         let history_revision = self.history_revision.load(Ordering::Acquire);
         if self.is_updating.load(Ordering::Acquire) {
             return;
@@ -569,8 +648,14 @@ impl PersistentMemorySystem {
         let ai_name = self.ai_name.clone();
         let limits = self.section_limits;
 
-        tokio::spawn(async move {
+        // Hold the task at a start barrier until its JoinHandle is published.
+        // Without this, a very fast provider could finish between spawn() and
+        // slot assignment, allowing a concurrent trigger to start a second job
+        // and then have its handle overwritten by the first job.
+        let (start_tx, start_rx) = oneshot::channel();
+        let abort_handle = tokio::spawn(async move {
             let _updating_guard = UpdatingGuard(is_updating.clone());
+            let _ = start_rx.await;
             // 仅当前历史版本的失败才进入冷却；过期任务不能污染新会话的重试状态。
             let record_failure = || {
                 if !record_failure_if_current(
@@ -713,6 +798,13 @@ impl PersistentMemorySystem {
                 target_idx,
             );
         });
+        let mut slot = self
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(abort_handle);
+        // Publish the handle before allowing the task to execute any work.
+        let _ = start_tx.send(());
     }
 
     /// 返回 `Ok(新内容)` 或传播 LLM 错误。调用方负责失败重试（不推进指针）。

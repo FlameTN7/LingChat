@@ -4,7 +4,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use std::sync::Arc;
-    use tokio::sync::oneshot;
+    use tokio::sync::{Notify, oneshot};
     use tower::ServiceExt;
 
     fn state() -> ApiState {
@@ -13,6 +13,8 @@ mod tests {
             token: Arc::from("test-token"),
             shutdown: Arc::new(std::sync::Mutex::new(Some(sender))),
             busy: Arc::new(std::sync::Mutex::new(false)),
+            closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            idle: Arc::new(Notify::new()),
         }
     }
 
@@ -94,17 +96,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deferred_autosave_scenario_is_not_reported_as_roundtrip() {
+    async fn autosave_scenario_executes_real_save_and_retry() {
         let response = router(state())
             .oneshot(
                 Request::post("/v1/scenarios/memory-finishes-after-line-save")
                     .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from("{}"))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["outcome"], "succeeded");
+        assert_eq!(body["persistence_roundtrip"], true);
+        assert_eq!(body["details"]["persisted_last_processed_global_idx"], 2);
     }
 
     #[tokio::test]

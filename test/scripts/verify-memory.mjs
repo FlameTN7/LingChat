@@ -112,12 +112,9 @@ try {
     "basic-compression": "basic.json", "append-during-update": "append_during_update.json",
     "one-section-fails": "partial_failure.json", "empty-section-fails": "partial_failure.json",
     "stale-on-rollback": "rollback.json", "persistence-roundtrip": "basic.json",
+    "memory-finishes-after-line-save": "basic.json",
   };
   for (const name of scenarioNames) {
-    if (name === "memory-finishes-after-line-save") {
-      results.push({ name, status: 501, outcome: "not_implemented", deferred: "real AutoSaveManager integration" });
-      continue;
-    }
     const fixture = fixtureFor[name];
     const payload = JSON.parse(readFileSync(join(fixturesDir, fixture), "utf8"));
     payload.scenario = name;
@@ -131,7 +128,8 @@ try {
     if (["one-section-fails", "empty-section-fails", "stale-on-rollback"].includes(name) && (body.committed || body.outcome !== "not_committed" || body.calls !== 4 || body.last_processed_global_idx !== 0)) throw new Error(`${name}: rollback assertion failed`);
     if (name === "append-during-update" && (body.outcome !== "succeeded" || body.first_processed_global_idx !== 4 || body.unprocessed_tail_lines !== 1 || !body.second_batch_committed || body.calls !== 8)) throw new Error(`${name}: append assertion failed`);
     if (name === "persistence-roundtrip" && body.persistence_roundtrip !== true) throw new Error(`${name}: round-trip assertion failed`);
-    results.push({ name, fixture, fixture_sha256: fixtureHashes[fixture], status: response.status, outcome: body.outcome, calls: body.calls, committed: body.committed, assertions: { triggered: body.triggered, pointer: body.last_processed_global_idx, tail: body.unprocessed_tail_lines, persistence_roundtrip: body.persistence_roundtrip } });
+    if (name === "memory-finishes-after-line-save" && (body.outcome !== "succeeded" || body.persistence_roundtrip !== true || body.details?.persisted_last_processed_global_idx !== 2)) throw new Error(`${name}: late autosave assertion failed`);
+    results.push({ name, fixture, fixture_sha256: fixtureHashes[fixture], status: response.status, outcome: body.outcome, calls: body.calls, committed: body.committed, assertions: { triggered: body.triggered, pointer: body.last_processed_global_idx, tail: body.unprocessed_tail_lines, persistence_roundtrip: body.persistence_roundtrip, persisted_last_processed_global_idx: body.details?.persisted_last_processed_global_idx } });
   }
   const multilingual = JSON.parse(readFileSync(join(fixturesDir, "multilingual.json"), "utf8"));
   const contractResponse = await fetch(`${base}/v1/memory/validate`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(multilingual) });

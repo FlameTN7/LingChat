@@ -18,6 +18,24 @@ use crate::db::managers::memory_repo::MemoryRepo;
 use crate::db::managers::role_repo::RoleRepo;
 use crate::utils::path::resolve_character_path;
 
+/// Select the newest row for each role before decoding JSON. Database result
+/// order is intentionally irrelevant; malformed superseded rows are ignored.
+fn select_latest_memory_rows(
+    memories: &[crate::db::entities::memory_bank::Model],
+) -> HashMap<i32, &crate::db::entities::memory_bank::Model> {
+    let mut latest = HashMap::new();
+    for row in memories {
+        let Some(role_id) = row.role_id else { continue };
+        if latest
+            .get(&role_id)
+            .is_none_or(|current: &&crate::db::entities::memory_bank::Model| row.id > current.id)
+        {
+            latest.insert(role_id, row);
+        }
+    }
+    latest
+}
+
 /// 角色运行时管理器：维护当前活跃角色的内存状态。
 pub struct GameRoleManager {
     pub loaded_roles: HashMap<i32, GameRole>,
@@ -457,13 +475,7 @@ impl GameRoleManager {
         // 先按 id 选择每个 role 的最新记录，再只解析被选中的行。
         // 旧重复行可能包含坏 JSON，但既有兼容语义是取最大 id，不能让旧行
         // 在选择完成前阻断有效的新行。
-        let mut best: HashMap<i32, &crate::db::entities::memory_bank::Model> = HashMap::new();
-        for m in &memories {
-            let Some(rid) = m.role_id else { continue };
-            if best.get(&rid).map_or(true, |current| m.id > current.id) {
-                best.insert(rid, m);
-            }
-        }
+        let best = select_latest_memory_rows(&memories);
 
         // 未指定角色时，当前会话中的角色也必须纳入目标集合；否则新存档缺少
         // 某角色时旧 bank 会泄漏到新会话。
@@ -611,21 +623,11 @@ impl GameRoleManager {
         vm.update_lang_and_refresh(&voice_cfg, &tts_type, &name, lang);
     }
 
-    pub async fn persist_memory_banks_to_db(
-        &mut self,
-        db: &DatabaseConnection,
-        save_id: i32,
-        role_ids: Option<&[i32]>,
-    ) -> Result<Vec<(i32, u64)>> {
-        // 先按稳定顺序捕获一次不可变快照；之后的 DB 写入不再读取 runtime 或
-        // GameRole 镜像，避免后台提交恰好发生在同步与序列化之间时保存旧值。
-        let mut target_ids: Vec<i32> = match role_ids {
-            Some(ids) => ids.to_vec(),
-            None => self.loaded_roles.keys().copied().collect(),
-        };
+    /// Capture all loaded banks once, in stable role order, for a save session.
+    pub async fn memory_bank_snapshots(&self) -> Vec<(i32, GameMemoryBank, u64)> {
+        let mut target_ids: Vec<i32> = self.loaded_roles.keys().copied().collect();
         target_ids.sort_unstable();
         target_ids.dedup();
-
         let mut snapshots = Vec::with_capacity(target_ids.len());
         for rid in target_ids {
             let snapshot = if let Some(sys) = self.memory_bank_systems.get(&rid) {
@@ -640,14 +642,37 @@ impl GameRoleManager {
                 snapshots.push((rid, bank, revision));
             }
         }
+        snapshots
+    }
 
-        for (rid, bank, _) in &snapshots {
+    pub async fn persist_memory_banks_to_db(
+        &mut self,
+        db: &DatabaseConnection,
+        save_id: i32,
+        role_ids: Option<&[i32]>,
+    ) -> Result<Vec<(i32, u64)>> {
+        // Capture first; DB writes consume this immutable session snapshot.
+        let mut snapshots = self.memory_bank_snapshots().await;
+        if let Some(role_ids) = role_ids {
+            snapshots.retain(|(role_id, _, _)| role_ids.contains(role_id));
+        }
+        self.persist_memory_bank_snapshots_to_db(db, save_id, &snapshots)
+            .await
+    }
+
+    pub async fn persist_memory_bank_snapshots_to_db(
+        &self,
+        db: &DatabaseConnection,
+        save_id: i32,
+        snapshots: &[(i32, GameMemoryBank, u64)],
+    ) -> Result<Vec<(i32, u64)>> {
+        for (rid, bank, _) in snapshots {
             let info = serde_json::to_string(bank)?;
             MemoryRepo::upsert_memory(db, save_id, *rid, &info, None).await?;
         }
         Ok(snapshots
-            .into_iter()
-            .map(|(role_id, _, revision)| (role_id, revision))
+            .iter()
+            .map(|(role_id, _, revision)| (*role_id, *revision))
             .collect())
     }
 
@@ -746,16 +771,67 @@ impl GameRoleManager {
 
 #[cfg(test)]
 mod memory_bank_context_tests {
-    use super::GameRoleManager;
+    use super::{GameRoleManager, select_latest_memory_rows};
     use crate::ai_service::game_system::persistent_memory_system::{
         MemorySectionLimits, PersistentMemorySystem,
     };
     use crate::ai_service::llm::LlmSlot;
     use crate::ai_service::types::{GameMemoryBank, LlmMessage};
     use crate::config::tts::TtsConfig;
+    use crate::db::entities::memory_bank;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    #[test]
+    fn duplicate_memory_rows_choose_max_id_before_decode_even_when_unordered() {
+        let valid = serde_json::to_string(&GameMemoryBank::default()).unwrap();
+        let rows = vec![
+            memory_bank::Model {
+                id: 20,
+                info: "{broken-old".into(),
+                save_id: 1,
+                role_id: Some(7),
+            },
+            memory_bank::Model {
+                id: 22,
+                info: valid.clone(),
+                save_id: 1,
+                role_id: Some(7),
+            },
+            memory_bank::Model {
+                id: 21,
+                info: valid,
+                save_id: 1,
+                role_id: Some(8),
+            },
+        ];
+        let selected = select_latest_memory_rows(&rows);
+        assert_eq!(selected[&7].id, 22);
+        assert_eq!(selected[&8].id, 21);
+        assert!(serde_json::from_str::<GameMemoryBank>(&selected[&7].info).is_ok());
+    }
+
+    #[test]
+    fn duplicate_memory_rows_keep_newest_bad_json_as_explicit_error() {
+        let rows = vec![
+            memory_bank::Model {
+                id: 32,
+                info: "{broken-new".into(),
+                save_id: 1,
+                role_id: Some(7),
+            },
+            memory_bank::Model {
+                id: 31,
+                info: serde_json::to_string(&GameMemoryBank::default()).unwrap(),
+                save_id: 1,
+                role_id: Some(7),
+            },
+        ];
+        let selected = select_latest_memory_rows(&rows);
+        assert_eq!(selected[&7].id, 32);
+        assert!(serde_json::from_str::<GameMemoryBank>(&selected[&7].info).is_err());
+    }
 
     #[test]
     fn invalidation_covers_systems_for_roles_no_longer_present_in_history() {

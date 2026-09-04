@@ -1,8 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::ai_service::types::GameMemoryBank;
+    use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
+    use crate::ai_service::game_system::role_manager::GameRoleManager;
+    use crate::ai_service::llm::LlmSlot;
+    use crate::ai_service::types::{GameMemoryBank, GameRole};
+    use crate::config::tts::TtsConfig;
+    use crate::db::entities::memory_bank;
     use crate::db::managers::memory_repo::MemoryRepo;
     use crate::memory_test_api::temp_db::TemporaryDatabase;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn memory_bank_round_trips_through_migrated_sqlite() {
@@ -27,6 +34,102 @@ mod tests {
         assert_eq!(parsed.base.content, "风雪说：你好，世界 🌏");
         assert_eq!(parsed.base.attribute.as_str(), "user");
         assert_eq!(value["display_name"], "测试角色");
+    }
+
+    #[tokio::test]
+    async fn duplicate_rows_select_latest_before_parsing() {
+        let db = TemporaryDatabase::open().await.unwrap();
+        let (save_id, role_id) = db.seed_save_role(708, "duplicates").await.unwrap();
+        let old = memory_bank::ActiveModel {
+            info: sea_orm::Set("{not-json".into()),
+            save_id: sea_orm::Set(save_id),
+            role_id: sea_orm::Set(Some(role_id)),
+            ..Default::default()
+        };
+        use sea_orm::ActiveModelTrait;
+        old.insert(&db.connection).await.unwrap();
+        let mut bank = GameMemoryBank::default();
+        bank.data.long_term = "latest valid".into();
+        let encoded = serde_json::to_string(&bank).unwrap();
+        memory_bank::ActiveModel {
+            info: sea_orm::Set(encoded),
+            save_id: sea_orm::Set(save_id),
+            role_id: sea_orm::Set(Some(role_id)),
+            ..Default::default()
+        }
+        .insert(&db.connection)
+        .await
+        .unwrap();
+        let row = MemoryRepo::get_latest_memory(&db.connection, save_id, role_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let loaded: GameMemoryBank = serde_json::from_str(&row.info).unwrap();
+        assert_eq!(loaded.data.long_term, "latest valid");
+    }
+
+    #[tokio::test]
+    async fn role_manager_ignores_old_bad_duplicate_but_rejects_new_bad_duplicate() {
+        let db = TemporaryDatabase::open().await.unwrap();
+        let (save_id, role_id) = db.seed_save_role(709, "duplicate-load").await.unwrap();
+        use sea_orm::ActiveModelTrait;
+        memory_bank::ActiveModel {
+            info: sea_orm::Set("{old-bad".into()),
+            save_id: sea_orm::Set(save_id),
+            role_id: sea_orm::Set(Some(role_id)),
+            ..Default::default()
+        }
+        .insert(&db.connection)
+        .await
+        .unwrap();
+        let valid = serde_json::to_string(&GameMemoryBank::default()).unwrap();
+        memory_bank::ActiveModel {
+            info: sea_orm::Set(valid),
+            save_id: sea_orm::Set(save_id),
+            role_id: sea_orm::Set(Some(role_id)),
+            ..Default::default()
+        }
+        .insert(&db.connection)
+        .await
+        .unwrap();
+        let llm: LlmSlot = Arc::new(RwLock::new(None));
+        let mut manager = GameRoleManager::new(
+            db.directory.path().to_path_buf(),
+            llm,
+            TtsConfig::default(),
+            None,
+            true,
+            1,
+            0,
+            MemorySectionLimits::default(),
+        );
+        manager.loaded_roles.insert(
+            role_id,
+            GameRole {
+                role_id: Some(role_id),
+                display_name: Some("duplicate-load".into()),
+                ..Default::default()
+            },
+        );
+        manager
+            .load_memory_banks_from_db(&db.connection, save_id, Some(&[role_id]))
+            .await
+            .unwrap();
+
+        memory_bank::ActiveModel {
+            info: sea_orm::Set("{new-bad".into()),
+            save_id: sea_orm::Set(save_id),
+            role_id: sea_orm::Set(Some(role_id)),
+            ..Default::default()
+        }
+        .insert(&db.connection)
+        .await
+        .unwrap();
+        let error = manager
+            .load_memory_banks_from_db(&db.connection, save_id, Some(&[role_id]))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("memory_bank.id"));
     }
 
     #[tokio::test]

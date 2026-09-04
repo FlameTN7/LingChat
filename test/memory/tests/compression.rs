@@ -2,6 +2,7 @@
 mod tests {
     use std::time::Duration;
 
+    use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
     use crate::ai_service::types::GameMemoryBank;
     use crate::memory_test_api::harness::{validate_real, validate_scripted};
     use crate::memory_test_api::scripted_provider::ScriptedProvider;
@@ -65,6 +66,37 @@ mod tests {
         .unwrap();
         assert!(result.committed);
         assert!(provider.saw_prompt_text("【角色名称】：雪月花"));
+    }
+
+    #[tokio::test]
+    async fn timeout_aborts_and_joins_all_four_calls_before_returning() {
+        let provider = ScriptedProvider {
+            delay_ms: 250,
+            ..Default::default()
+        };
+        let error = validate_real(
+            provider.clone(),
+            GameMemoryBank::default(),
+            7,
+            None,
+            4,
+            1,
+            0,
+            MemorySectionLimits::default(),
+            Duration::from_millis(5),
+            false,
+            false,
+            "Test AI",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert_eq!(provider.calls(), 4);
+        provider.wait_idle().await;
+        assert_eq!(
+            provider.active.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
     }
 
     #[tokio::test]

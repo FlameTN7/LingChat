@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
-use super::harness::validate_real;
+use super::harness::{validate_late_autosave, validate_real};
 use super::scenarios;
 use super::scripted_provider::ScriptedProvider;
 use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
@@ -23,14 +23,20 @@ pub struct ApiState {
     pub token: Arc<str>,
     pub shutdown: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
     pub busy: Arc<std::sync::Mutex<bool>>,
+    pub closing: Arc<std::sync::atomic::AtomicBool>,
+    pub idle: Arc<Notify>,
 }
 
-struct BusyGuard(Arc<std::sync::Mutex<bool>>);
+struct BusyGuard {
+    busy: Arc<std::sync::Mutex<bool>>,
+    idle: Arc<Notify>,
+}
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        if let Ok(mut busy) = self.0.lock() {
+        if let Ok(mut busy) = self.busy.lock() {
             *busy = false;
         }
+        self.idle.notify_waiters();
     }
 }
 
@@ -295,18 +301,18 @@ async fn validate_inner(
             request.line_count = 4;
             request.update_interval = 1;
         },
-        // AutoSave requires driving the application save manager and is
-        // deliberately deferred rather than reported as a DB round-trip.
         "memory-finishes-after-line-save" => {
-            return (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({
-                    "error": "autosave_scenario_deferred",
-                    "outcome": "not_implemented",
-                    "next_phase": "real AutoSaveManager integration"
-                })),
-            )
-                .into_response();
+            request.initial_bank = GameMemoryBank::default();
+            request.line_count = 2;
+            request.update_interval = 1;
+            request.delay_ms = request.delay_ms.max(10);
+            request.fail_section = None;
+            request.empty_section = None;
+            request.panic_section = None;
+            request.append_during_update = false;
+            request.rollback_during_update = false;
+            request.persistence_roundtrip = false;
+            request.database = false;
         },
         _ => {},
     }
@@ -335,8 +341,15 @@ async fn validate_inner(
         )
             .into_response();
     }
+    if state.closing.load(std::sync::atomic::Ordering::Acquire) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error":"validation_shutting_down"})),
+        )
+            .into_response();
+    }
     let acquired = match state.busy.lock() {
-        Ok(mut busy) if !*busy => {
+        Ok(mut busy) if !*busy && !state.closing.load(std::sync::atomic::Ordering::Acquire) => {
             *busy = true;
             true
         },
@@ -356,7 +369,10 @@ async fn validate_inner(
         )
             .into_response();
     }
-    let _busy_guard = BusyGuard(state.busy.clone());
+    let _busy_guard = BusyGuard {
+        busy: state.busy.clone(),
+        idle: state.idle.clone(),
+    };
     if request.lines.len() > 10_000 {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -373,12 +389,52 @@ async fn validate_inner(
     };
     let timeout = Duration::from_millis(request.timeout_ms);
     let started = std::time::Instant::now();
+    if request.scenario == "memory-finishes-after-line-save" {
+        let result = validate_late_autosave(
+            ScriptedProvider {
+                delay_ms: request.delay_ms,
+                ..Default::default()
+            },
+            request.role_id,
+            &request.display_name,
+            timeout,
+        )
+        .await;
+        return match result {
+            Ok(details) => Json(serde_json::json!({
+                "outcome": "succeeded",
+                "scenario": request.scenario,
+                "triggered": true,
+                "committed": true,
+                "calls": details["calls"],
+                "persistence_roundtrip": true,
+                "persistence_result": "saved_and_loaded",
+                "details": details,
+                "duration_ms": started.elapsed().as_millis(),
+                "error_code": null,
+            }))
+            .into_response(),
+            Err(error) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "scenario_assertion_failed",
+                    "scenario": request.scenario,
+                    "outcome": "persistence_failed",
+                    "detail": error.to_string(),
+                })),
+            )
+                .into_response(),
+        };
+    }
     let lines = if request.lines.is_empty() {
         None
     } else {
         Some(request.lines)
     };
-    let run = validate_real(
+    // `validate_real` owns the sole timeout and aborts/joins the production
+    // compression task before returning. Do not wrap it in another timeout:
+    // that would release this handler while detached work is still alive.
+    let result = validate_real(
         provider.clone(),
         request.initial_bank,
         request.role_id,
@@ -391,11 +447,11 @@ async fn validate_inner(
         request.append_during_update,
         request.rollback_during_update,
         &request.display_name,
-    );
-    let result = tokio::time::timeout(timeout, run).await;
+    )
+    .await;
     let duration_ms = started.elapsed().as_millis();
     match result {
-        Ok(Ok(result)) => {
+        Ok(result) => {
             let mut persistence_roundtrip = None;
             let mut persistence_error = None;
             if (request.persistence_roundtrip || request.database) && result.committed {
@@ -514,25 +570,22 @@ async fn validate_inner(
             })
             .into_response()
         },
-        Ok(Err(error)) => {
-            provider.wait_idle().await;
-            // Do not manufacture a ValidationResult on harness failure. The
-            // caller receives a stable error response without a claimed
-            // outcome/commit state, and the single-flight guard is released.
+        Err(error) => {
+            // The harness has already joined/aborted all production work. Keep
+            // timeout as a single, truthful HTTP outcome rather than returning
+            // a misleading generic validation success/failure.
+            let timed_out = error.to_string().contains("timed out");
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                if timed_out {
+                    StatusCode::REQUEST_TIMEOUT
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                },
                 Json(serde_json::json!({
-                    "error": "validation_failed",
+                    "error": if timed_out { "timed_out" } else { "validation_failed" },
+                    "outcome": if timed_out { "timed_out" } else { "validation_failed" },
                     "detail": error.to_string()
                 })),
-            )
-                .into_response()
-        },
-        Err(_) => {
-            provider.wait_idle().await;
-            (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(serde_json::json!({"error":"timed_out","outcome":"timed_out"})),
             )
                 .into_response()
         },
@@ -543,12 +596,28 @@ async fn shutdown(State(state): State<ApiState>, headers: HeaderMap) -> impl Int
     if !authorized(&headers, &state.token) {
         return unauthorized().into_response();
     }
-    if let Some(sender) = state
+    state
+        .closing
+        .store(true, std::sync::atomic::Ordering::Release);
+    // Stop new validation requests first, then wait for the current handler's
+    // cleanup. The handler owns and joins its production compression task on
+    // timeout/error, so idle here is a real lifecycle boundary.
+    loop {
+        let busy = state.busy.lock().map(|guard| *guard).unwrap_or(true);
+        if !busy {
+            break;
+        }
+        let notified = state.idle.notified();
+        // Keep all std mutex guards in a separate statement; none may live
+        // across this await in an axum handler.
+        notified.await;
+    }
+    let sender = state
         .shutdown
         .lock()
         .ok()
-        .and_then(|mut guard| guard.take())
-    {
+        .and_then(|mut guard| guard.take());
+    if let Some(sender) = sender {
         let _ = sender.send(());
     }
     Json(serde_json::json!({"ok":true})).into_response()
@@ -562,6 +631,8 @@ pub async fn serve(token: Arc<str>) -> std::io::Result<()> {
         token,
         shutdown: Arc::new(std::sync::Mutex::new(Some(shutdown_tx))),
         busy: Arc::new(std::sync::Mutex::new(false)),
+        closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        idle: Arc::new(Notify::new()),
     };
     println!(
         "{}",

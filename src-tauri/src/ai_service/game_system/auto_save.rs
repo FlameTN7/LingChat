@@ -9,6 +9,8 @@ use tauri::{AppHandle, Emitter, WebviewWindow};
 use tokio::sync::Mutex;
 
 use crate::ai_service::service::SharedAIService;
+use crate::ai_service::types::{GameLine, GameMemoryBank};
+use crate::db::managers::memory_repo::MemoryRepo;
 use crate::db::managers::save_repo::SaveRepo;
 
 const AUTO_SAVE_PREFIX: &str = "自动存档";
@@ -48,7 +50,7 @@ struct AutoSaveEventPayload {
 }
 
 pub struct AutoSaveManager {
-    app: AppHandle,
+    app: Option<AppHandle>,
     db: DatabaseConnection,
     ai_service: SharedAIService,
     /// Snapshot fingerprint at the moment of the last successful auto-save.
@@ -67,7 +69,7 @@ mod tests;
 impl AutoSaveManager {
     pub fn new(app: AppHandle, db: DatabaseConnection, ai_service: SharedAIService) -> Self {
         Self {
-            app,
+            app: Some(app),
             db,
             ai_service,
             last_saved_fingerprint: None,
@@ -136,11 +138,12 @@ impl AutoSaveManager {
 
     /// Perform a save if line_list is non-empty and has changed since last save.
     async fn perform_save(&mut self) -> Result<(), String> {
-        // 1. Compute the complete runtime fingerprint (returns None if there is
-        // no actual conversation to save).
-        let current_fingerprint = self.compute_fingerprint().await;
-        let current_fingerprint = match current_fingerprint {
-            Some(fingerprint) => fingerprint,
+        // Capture the fingerprint and the exact lines that will be sent to
+        // sync_lines as one immutable session snapshot. Re-reading line_list
+        // after this point could pair marker A with persisted lines B when an
+        // append/rollback races the save.
+        let (current_fingerprint, lines, memory_snapshots) = match self.compute_snapshot().await {
+            Some(snapshot) => snapshot,
             None => return Ok(()),
         };
 
@@ -160,12 +163,9 @@ impl AutoSaveManager {
         }
 
         // 4. Perform the actual save
+        let service = self.ai_service.lock().await;
 
-        // 4. Perform the actual save
-        let mut service = self.ai_service.lock().await;
-        let lines = service.game_status.lock().await.line_list.clone();
-
-        // 4a. Sync lines (smart diff)
+        // 4a. Sync the immutable snapshot captured above (smart diff)
         SaveRepo::sync_lines(&self.db, save_id, &lines)
             .await
             .map_err(|e| format!("同步台词失败: {}", e))?;
@@ -181,13 +181,18 @@ impl AutoSaveManager {
             .await
             .map_err(|e| format!("保存状态失败: {}", e))?;
 
-        // 4d. Persist memory banks. The repository returns the revisions from
-        // the immutable snapshots it actually wrote, so a concurrent commit
+        // 4d. Persist the immutable bank snapshots without retaining the
+        // GameStatus lock across database awaits. A concurrent commit therefore
         // cannot make the success marker claim a newer bank was persisted.
-        let saved_memory_revisions = service
-            .persist_memory_banks(save_id)
-            .await
-            .map_err(|e| format!("保存记忆库失败: {}", e))?;
+        let mut saved_memory_revisions = Vec::with_capacity(memory_snapshots.len());
+        for (role_id, bank, revision) in &memory_snapshots {
+            let info =
+                serde_json::to_string(bank).map_err(|e| format!("序列化记忆库失败: {}", e))?;
+            MemoryRepo::upsert_memory(&self.db, save_id, *role_id, &info, None)
+                .await
+                .map_err(|e| format!("保存记忆库失败: {}", e))?;
+            saved_memory_revisions.push((*role_id, *revision));
+        }
 
         // 4e. Persist script state (if running)
         if let Some(ref script_status) = service.game_status.lock().await.script_status {
@@ -220,17 +225,43 @@ impl AutoSaveManager {
         let title = format!("{} {}", AUTO_SAVE_PREFIX, now.format("%Y-%m-%d %H:%M:%S"));
         let timestamp = now.format("%H:%M:%S").to_string();
 
-        let _ = self.app.emit(
-            "save:auto-saved",
-            AutoSaveEventPayload {
-                save_id,
-                title,
-                timestamp,
-            },
-        );
+        if let Some(app) = &self.app {
+            let _ = app.emit(
+                "save:auto-saved",
+                AutoSaveEventPayload {
+                    save_id,
+                    title,
+                    timestamp,
+                },
+            );
+        }
 
         tracing::info!("[AutoSave] 自动存档完成 save_id={}", save_id);
         Ok(())
+    }
+
+    #[cfg(feature = "memory-test-api")]
+    pub fn for_test(db: DatabaseConnection, ai_service: SharedAIService) -> Self {
+        Self {
+            app: None,
+            db,
+            ai_service,
+            last_saved_fingerprint: None,
+            last_saved_save_id: None,
+            auto_save_id: None,
+        }
+    }
+
+    #[cfg(feature = "memory-test-api")]
+    pub async fn perform_test_save(&mut self) -> Result<(), String> {
+        self.perform_save().await
+    }
+
+    #[cfg(feature = "memory-test-api")]
+    pub fn test_saved_revision(&self) -> Option<Vec<(i32, u64)>> {
+        self.last_saved_fingerprint
+            .as_ref()
+            .map(|fingerprint| fingerprint.memory_revisions.clone())
     }
 
     /// Exit save: force a save regardless of change detection.
@@ -248,8 +279,16 @@ impl AutoSaveManager {
         self.last_saved_save_id = None;
     }
 
-    /// Compute a stable fingerprint of line history and all loaded MemoryBanks.
-    async fn compute_fingerprint(&self) -> Option<AutoSaveFingerprint> {
+    /// Capture a stable fingerprint and the exact immutable line snapshot it
+    /// describes. The hash must be computed from the same lines passed to the
+    /// repository, not from a second later lock acquisition.
+    async fn compute_snapshot(
+        &self,
+    ) -> Option<(
+        AutoSaveFingerprint,
+        Vec<GameLine>,
+        Vec<(i32, GameMemoryBank, u64)>,
+    )> {
         let service = self.ai_service.lock().await;
         let status = service.game_status.lock().await;
 
@@ -259,17 +298,26 @@ impl AutoSaveManager {
             return None;
         }
 
+        let lines = status.line_list.clone();
         let mut hasher = DefaultHasher::new();
-        for line in &status.line_list {
+        for line in &lines {
             line.base.content.hash(&mut hasher);
             line.base.sender_role_id.hash(&mut hasher);
             line.base.attribute.as_str().hash(&mut hasher);
         }
 
-        Some(AutoSaveFingerprint {
-            line_hash: hasher.finish(),
-            memory_revisions: status.role_manager.memory_bank_revisions(),
-        })
+        let memory_snapshots = status.role_manager.memory_bank_snapshots().await;
+        Some((
+            AutoSaveFingerprint {
+                line_hash: hasher.finish(),
+                memory_revisions: memory_snapshots
+                    .iter()
+                    .map(|(role_id, _, revision)| (*role_id, *revision))
+                    .collect(),
+            },
+            lines,
+            memory_snapshots,
+        ))
     }
 
     /// Find the existing auto-save slot by title prefix, or create a new one.
