@@ -7,11 +7,8 @@ use tokio::time::sleep;
 use super::scripted_provider::ScriptedProvider;
 use crate::ai_service::game_system::auto_save::AutoSaveManager;
 use crate::ai_service::game_system::game_status::GameStatus;
-use crate::ai_service::game_system::persistent_memory_system::{
-    MemorySectionLimits, PersistentMemorySystem,
-};
+use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
 use crate::ai_service::game_system::role_manager::GameRoleManager;
-use crate::ai_service::llm::LlmSlot;
 use crate::ai_service::service::AIService;
 use crate::ai_service::types::GameRole;
 use crate::ai_service::types::{GameLine, GameMemoryBank, LineAttributeExt, LineBase};
@@ -69,24 +66,45 @@ pub async fn validate_real(
     rollback_during_update: bool,
     display_name: &str,
 ) -> Result<ValidationResult> {
-    let llm = provider.clone().slot();
-    let memory = PersistentMemorySystem::new(
-        role_id,
-        &initial_bank,
-        llm,
+    // Build the same production GameRoleManager used by GameStatus. The
+    // append path must refresh this exact manager, not a disconnected helper
+    // PersistentMemorySystem.
+    let db = super::temp_db::TemporaryDatabase::open().await?;
+    let _ = db.seed_save_role(role_id, display_name).await?;
+    let mut manager = GameRoleManager::new(
+        db.directory.path().to_path_buf(),
+        provider.clone().slot(),
+        TtsConfig::default(),
+        None,
         true,
-        update_interval,
-        recent_window,
+        update_interval as u32,
+        recent_window as u32,
         section_limits,
-        display_name,
     );
-    let mut history = input_lines.unwrap_or_else(|| lines(role_id, line_count));
-    let target = history.len();
-    memory.check_and_trigger_auto_update(&history);
+    manager.loaded_roles.insert(
+        role_id,
+        crate::ai_service::types::GameRole {
+            role_id: Some(role_id),
+            display_name: Some(display_name.to_string()),
+            memory_bank: initial_bank,
+            ..Default::default()
+        },
+    );
+    let mut status = GameStatus::new(manager);
+    status.present_role_ids.insert(role_id);
+    status.line_list = input_lines.unwrap_or_else(|| lines(role_id, line_count));
+    let target = status.line_list.len();
+    status.refresh_memories(&db.connection).await?;
     let triggered = {
         let deadline = Instant::now() + timeout;
         loop {
-            if memory.is_updating() || provider.calls() > 0 {
+            if status
+                .role_manager
+                .memory_snapshot(role_id)
+                .await
+                .is_some_and(|snapshot| snapshot.updating)
+                || provider.calls() > 0
+            {
                 break true;
             }
             if Instant::now() >= deadline {
@@ -96,33 +114,8 @@ pub async fn validate_real(
         }
     };
     if append_during_update && triggered {
-        // Exercise the production append entry point. No roles are present in
-        // this minimal status, so refresh_memories is a no-op after the append;
-        // the memory system above still owns the real compression task.
-        let db = super::temp_db::TemporaryDatabase::open().await?;
-        let _ = db.seed_save_role(role_id, display_name).await?;
-        let slot: LlmSlot = provider.clone().slot();
-        let mut manager = GameRoleManager::new(
-            db.directory.path().to_path_buf(),
-            slot,
-            TtsConfig::default(),
-            None,
-            false,
-            1,
-            0,
-            MemorySectionLimits::default(),
-        );
-        manager.loaded_roles.insert(
-            role_id,
-            crate::ai_service::types::GameRole {
-                role_id: Some(role_id),
-                display_name: Some(display_name.to_string()),
-                ..Default::default()
-            },
-        );
-        let mut status = GameStatus::new(manager);
-        status.present_role_ids.insert(role_id);
-        status.line_list = history;
+        // This is the production GameStatus::add_line entry point and it owns
+        // the very same manager/runtime that received the first refresh.
         status
             .add_line(
                 &db.connection,
@@ -134,23 +127,22 @@ pub async fn validate_real(
                 },
             )
             .await?;
-        history = status.line_list;
     }
     if rollback_during_update && triggered {
-        // Rewrite invalidates the in-flight result; use the same production
-        // PersistentMemorySystem guard rather than a fake result override.
-        memory.rewrite_from(0).await;
+        status.role_manager.rewrite_memory_history(0).await;
     }
-    if !memory.wait_until_idle(timeout).await {
-        // Timeout is a lifecycle decision, not merely a polling result. Abort
-        // and join the owned task before returning, so a caller can safely
-        // start another validation without overlapping four LLM calls.
-        memory.abort_and_wait().await;
+    if !status.role_manager.wait_memory_updates(timeout).await {
+        status.role_manager.abort_memory_updates().await;
         return Err(anyhow!(
             "validation timed out while compression was running"
         ));
     }
-    let first_snapshot = memory.snapshot().await;
+    let history = status.line_list.clone();
+    let first_snapshot = status
+        .role_manager
+        .memory_snapshot(role_id)
+        .await
+        .ok_or_else(|| anyhow!("memory runtime was not initialized"))?;
     let first_processed_idx = first_snapshot.bank.meta.last_processed_global_idx;
     let first_tail_lines = history
         .len()
@@ -159,15 +151,19 @@ pub async fn validate_real(
     let mut second_batch_committed = false;
     if append_during_update && first_processed_idx >= target as i64 {
         // The newly appended tail must be eligible for a subsequent threshold
-        // batch, not merely present in a local Vec used for assertions.
-        memory.check_and_trigger_auto_update(&history);
-        if !memory.wait_until_idle(timeout).await {
-            memory.abort_and_wait().await;
+        // batch through GameStatus::refresh_memories, not a local Vec assertion.
+        status.refresh_memories(&db.connection).await?;
+        if !status.role_manager.wait_memory_updates(timeout).await {
+            status.role_manager.abort_memory_updates().await;
             return Err(anyhow!(
                 "validation timed out while second compression was running"
             ));
         }
-        snapshot = memory.snapshot().await;
+        snapshot = status
+            .role_manager
+            .memory_snapshot(role_id)
+            .await
+            .ok_or_else(|| anyhow!("memory runtime disappeared"))?;
         second_batch_committed =
             snapshot.bank.meta.last_processed_global_idx >= history.len() as i64;
     }
@@ -187,8 +183,8 @@ pub async fn validate_real(
         processed_idx,
         tail_lines,
         updating: snapshot.updating,
-        system_memory: memory.get_system_memory_text().await,
-        short_term_memory: memory.get_short_term_user_text().await,
+        system_memory: status.role_manager.memory_system_text(role_id).await,
+        short_term_memory: status.role_manager.memory_short_term_text(role_id).await,
         target_idx: target,
         first_processed_idx,
         second_batch_committed,
@@ -258,23 +254,38 @@ pub async fn validate_late_autosave(
     let deadline = Instant::now() + timeout;
     while provider.calls() < 4 {
         if Instant::now() >= deadline {
+            let service = shared.lock().await;
+            let status = service.game_status.lock().await;
+            status.role_manager.abort_memory_updates().await;
             return Err(anyhow!("late autosave compression did not trigger"));
         }
         tokio::task::yield_now().await;
     }
     let mut autosave = AutoSaveManager::for_test(db.connection.clone(), shared.clone());
-    tokio::time::timeout(timeout, autosave.perform_test_save())
-        .await
-        .map_err(|_| anyhow!("first autosave timed out"))?
+    let first_save = tokio::time::timeout(timeout, autosave.perform_test_save()).await;
+    if first_save.is_err() {
+        let service = shared.lock().await;
+        let status = service.game_status.lock().await;
+        status.role_manager.abort_memory_updates().await;
+        return Err(anyhow!("first autosave timed out"));
+    }
+    first_save
+        .expect("timeout already checked")
         .map_err(|error| anyhow!("first autosave failed: {error}"))?;
     let first_revision = autosave
         .test_saved_revision()
         .ok_or_else(|| anyhow!("first autosave did not record a fingerprint"))?;
     provider.wait_idle().await;
     tokio::task::yield_now().await;
-    tokio::time::timeout(timeout, autosave.perform_test_save())
-        .await
-        .map_err(|_| anyhow!("second autosave timed out"))?
+    let second_save = tokio::time::timeout(timeout, autosave.perform_test_save()).await;
+    if second_save.is_err() {
+        let service = shared.lock().await;
+        let status = service.game_status.lock().await;
+        status.role_manager.abort_memory_updates().await;
+        return Err(anyhow!("second autosave timed out"));
+    }
+    second_save
+        .expect("timeout already checked")
         .map_err(|error| anyhow!("second autosave failed: {error}"))?;
     let second_revision = autosave
         .test_saved_revision()

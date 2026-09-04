@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Local;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
 use std::path::{Path, PathBuf};
 
 use crate::ai_service::types::GameMemoryBank;
@@ -43,6 +43,15 @@ impl TemporaryDatabase {
 
     pub fn path(&self) -> PathBuf {
         self.directory.path().join("game_database.db")
+    }
+
+    /// Open a second pool for tests that need to hold a real SQLite writer lock
+    /// while the production repository performs a save.
+    pub async fn secondary_connection(&self) -> Result<DatabaseConnection> {
+        let path = self.path();
+        Database::connect(format!("sqlite:{}?mode=rw", path.display()))
+            .await
+            .context("open secondary test database connection")
     }
 
     pub async fn seed_save_role(&self, role_id: i32, title: &str) -> Result<(i32, i32)> {

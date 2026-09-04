@@ -107,11 +107,12 @@ try {
   const auth = { Authorization: `Bearer ${ready.token}` };
   shutdownUrl = `${base}/shutdown`;
   shutdownHeaders = auth;
-  const scenarioNames = ["basic-compression", "append-during-update", "one-section-fails", "empty-section-fails", "stale-on-rollback", "persistence-roundtrip", "memory-finishes-after-line-save"];
+  const scenarioNames = ["basic-compression", "append-during-update", "one-section-fails", "empty-section-fails", "panic-compression", "stale-on-rollback", "persistence-roundtrip", "memory-finishes-after-line-save"];
   const fixtureFor = {
     "basic-compression": "basic.json", "append-during-update": "append_during_update.json",
     "one-section-fails": "partial_failure.json", "empty-section-fails": "partial_failure.json",
-    "stale-on-rollback": "rollback.json", "persistence-roundtrip": "basic.json",
+    "panic-compression": "partial_failure.json", "stale-on-rollback": "rollback.json",
+    "persistence-roundtrip": "basic.json",
     "memory-finishes-after-line-save": "basic.json",
   };
   for (const name of scenarioNames) {
@@ -125,7 +126,7 @@ try {
     if (response.status !== 200) throw new Error(`${name}: HTTP ${response.status} ${JSON.stringify(body)}`);
     if (body.committed && body.outcome !== "succeeded") throw new Error(`${name}: committed outcome mismatch`);
     if (name === "basic-compression" && (body.outcome !== "succeeded" || body.calls !== 4 || !body.triggered)) throw new Error(`${name}: assertion failed`);
-    if (["one-section-fails", "empty-section-fails", "stale-on-rollback"].includes(name) && (body.committed || body.outcome !== "not_committed" || body.calls !== 4 || body.last_processed_global_idx !== 0)) throw new Error(`${name}: rollback assertion failed`);
+    if (["one-section-fails", "empty-section-fails", "panic-compression", "stale-on-rollback"].includes(name) && (body.committed || body.outcome !== "not_committed" || body.calls !== 4 || body.last_processed_global_idx !== 0)) throw new Error(`${name}: rollback assertion failed`);
     if (name === "append-during-update" && (body.outcome !== "succeeded" || body.first_processed_global_idx !== 4 || body.unprocessed_tail_lines !== 1 || !body.second_batch_committed || body.calls !== 8)) throw new Error(`${name}: append assertion failed`);
     if (name === "persistence-roundtrip" && body.persistence_roundtrip !== true) throw new Error(`${name}: round-trip assertion failed`);
     if (name === "memory-finishes-after-line-save" && (body.outcome !== "succeeded" || body.persistence_roundtrip !== true || body.details?.persisted_last_processed_global_idx !== 2)) throw new Error(`${name}: late autosave assertion failed`);

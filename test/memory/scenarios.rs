@@ -5,6 +5,7 @@ pub const SCENARIOS: &[&str] = &[
     "append-during-update",
     "one-section-fails",
     "empty-section-fails",
+    "panic-compression",
     "persistence-roundtrip",
     "stale-on-rollback",
     "memory-finishes-after-line-save",

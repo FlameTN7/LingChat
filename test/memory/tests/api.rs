@@ -141,18 +141,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_waits_for_in_flight_validation_before_signaling_exit() {
+        let app = router(state());
+        let validation = tokio::spawn({
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::post("/v1/scenarios/memory-finishes-after-line-save")
+                        .header(header::AUTHORIZATION, "Bearer test-token")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"delay_ms":100}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let shutdown = app
+            .oneshot(
+                Request::post("/shutdown")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(shutdown.status(), StatusCode::OK);
+        let validation = validation.await.unwrap();
+        assert_eq!(validation.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn panic_validation_releases_single_flight_slot() {
         let app = router(state());
-        let request = || {
-            Request::post("/v1/memory/validate")
-                .header(header::AUTHORIZATION, "Bearer test-token")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    r#"{"scenario":"basic-compression","panic_section":"promises"}"#,
-                ))
-                .unwrap()
-        };
-        let response = app.clone().oneshot(request()).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/scenarios/panic-compression")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let response = app
             .oneshot(

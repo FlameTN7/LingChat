@@ -414,6 +414,25 @@ impl GameRoleManager {
         }
     }
 
+    /// Wait for every loaded role's owned memory task to finish.
+    pub async fn wait_memory_updates(&self, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        for system in self.memory_bank_systems.values() {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if !system.wait_until_idle(remaining).await {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Cancel and join every loaded role's owned memory task.
+    pub async fn abort_memory_updates(&self) {
+        for system in self.memory_bank_systems.values() {
+            system.abort_and_wait().await;
+        }
+    }
+
     /// Apply a history rewrite to every loaded memory runtime. Rewrites before
     /// an already processed prefix reset that bank; appends must not call this.
     pub async fn rewrite_memory_history(&self, from_idx: usize) {
@@ -621,6 +640,29 @@ impl GameRoleManager {
         let name = role.settings.ai_name.clone();
 
         vm.update_lang_and_refresh(&voice_cfg, &tts_type, &name, lang);
+    }
+
+    /// Read one role's memory runtime snapshot.
+    pub async fn memory_snapshot(
+        &self,
+        role_id: i32,
+    ) -> Option<crate::ai_service::game_system::persistent_memory_system::MemorySnapshot> {
+        let system = self.memory_bank_systems.get(&role_id)?;
+        Some(system.snapshot().await)
+    }
+
+    pub async fn memory_system_text(&self, role_id: i32) -> String {
+        match self.memory_bank_systems.get(&role_id) {
+            Some(system) => system.get_system_memory_text().await,
+            None => String::new(),
+        }
+    }
+
+    pub async fn memory_short_term_text(&self, role_id: i32) -> String {
+        match self.memory_bank_systems.get(&role_id) {
+            Some(system) => system.get_short_term_user_text().await,
+            None => String::new(),
+        }
     }
 
     /// Capture all loaded banks once, in stable role order, for a save session.
