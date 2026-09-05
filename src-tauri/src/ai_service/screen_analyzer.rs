@@ -293,12 +293,13 @@ pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
 
-    let img = ImageReader::new(std::io::Cursor::new(image_bytes))
+    // `ImageReader::limits` 就地修改接收者并返回 `()`，不能链式接 `.decode()`，
+    // 因此先构造 reader、设置限制、再单独调用 decode（与 read_media_file.rs 一致）。
+    let mut reader = ImageReader::new(std::io::Cursor::new(image_bytes))
         .with_guessed_format()
-        .ok()?
-        .limits(limits)
-        .decode()
         .ok()?;
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
 
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
