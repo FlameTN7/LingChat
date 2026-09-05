@@ -49,6 +49,9 @@ export const useLlmProvidersStore = defineStore("llm-providers", {
       reasoning_effort: null,
       fast_mode: false,
       support_vision: false,
+      vision_compress: false,
+      vision_max_edge: 2048,
+      vision_jpeg_quality: 85,
     }),
   },
   actions: {

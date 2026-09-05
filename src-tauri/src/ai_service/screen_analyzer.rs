@@ -272,20 +272,41 @@ fn encode_image_base64(bytes: &[u8], mime_type: &str) -> (String, String) {
     (b64, mime_type.to_string())
 }
 
-/// 上限：原生识图发送给对话模型的图片最大边长（像素），超宽图先等比缩放，
-/// 以控制这类模型的输入 token 与缓存占用。
-const NATIVE_IMAGE_MAX_EDGE: u32 = 1024;
-/// JPEG 编码质量：兼顾清晰度与体积（体积直接决定多模态输入的 token 占用）。
-const NATIVE_IMAGE_JPEG_QUALITY: u8 = 85;
+/// 原生识图发送给对话模型的图片处理参数。
+/// 默认**不压缩、原图直发**；`enabled` 为 true 时才做缩放 + JPEG 压缩。
+#[derive(Clone, Copy, Debug)]
+pub struct NativeImageCompress {
+    /// 是否开启压缩。false = 原图直发（保留原始格式与分辨率）。
+    pub enabled: bool,
+    /// 压缩时图片最大边长（像素），超宽图等比缩放。
+    pub max_edge: u32,
+    /// 压缩时 JPEG 编码质量（0-100）。
+    pub jpeg_quality: u8,
+}
 
-/// 把任意图片字节压缩为适合原生多模态识图的 `data:image/jpeg;base64,...` data URL。
+impl Default for NativeImageCompress {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_edge: 2048,
+            jpeg_quality: 85,
+        }
+    }
+}
+
+/// 把任意图片字节转换为适合原生多模态识图的 `data:image/...;base64,...` data URL。
 ///
 /// - 解码失败 / 超限返回 `None`（调用方自然回退到旁白转述）。
-/// - 统一转 JPEG 并等比缩放到 `NATIVE_IMAGE_MAX_EDGE`，透明通道压到白底，
-///   既减小 base64 体积（token/缓存占用），也避免 WebP/PNG 在某些 OpenAI 兼容
-///   视觉端点上的兼容问题。
+/// - `compress.enabled == false` 时**原图直发**：不解码重现压缩，仅识别格式并
+///   按原始字节编码 base64，保留原分辨率与清晰度（用户默认偏好）。
+/// - `compress.enabled == true` 时统一转 JPEG 并等比缩放到 `max_edge`，透明通道
+///   压到白底：既减小 base64 体积（token/缓存占用），也避免 WebP/PNG 在某些
+///   OpenAI 兼容视觉端点上的兼容问题。
 /// - **仅用于当轮请求**，不写入长期记忆（配合 `GeneratorDeps::transient_image`）。
-pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
+pub fn image_bytes_to_native_data_url(
+    image_bytes: &[u8],
+    compress: NativeImageCompress,
+) -> Option<String> {
     use image::imageops::FilterType;
     use image::{DynamicImage, GenericImageView, ImageReader};
 
@@ -306,8 +327,23 @@ pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
         return None;
     }
 
-    let resized = if w.max(h) > NATIVE_IMAGE_MAX_EDGE {
-        img.resize(NATIVE_IMAGE_MAX_EDGE, NATIVE_IMAGE_MAX_EDGE, FilterType::Lanczos3)
+    // ─── 原图直发：不缩放不重编码，保留原始格式字节 ───
+    if !compress.enabled {
+        let format = reader.format();
+        // 根据识别出的真实格式推断 MIME；未知格式统一按 png 兜底。
+        let mime = match format {
+            Some(image::ImageFormat::Jpeg) => "jpeg",
+            Some(image::ImageFormat::WebP) => "webp",
+            Some(_) | None => "png",
+        };
+        let b64 = base64::Engine::encode(&base64::prelude::BASE64_STANDARD, image_bytes);
+        return Some(format!("data:image/{mime};base64,{b64}"));
+    }
+
+    // ─── 压缩路径：等比缩放到 max_edge，转 JPEG ───
+    let max_edge = compress.max_edge.max(1);
+    let resized = if w.max(h) > max_edge {
+        img.resize(max_edge, max_edge, FilterType::Lanczos3)
     } else {
         img
     };
@@ -316,7 +352,7 @@ pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
     let rgb = flatten_on_white(&resized);
 
     let mut out = std::io::Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, NATIVE_IMAGE_JPEG_QUALITY)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, compress.jpeg_quality)
         .encode_image(&DynamicImage::ImageRgb8(rgb))
         .ok()?;
     let bytes = out.into_inner();

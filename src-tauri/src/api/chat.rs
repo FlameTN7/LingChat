@@ -10,7 +10,7 @@ use crate::ai_service::message_system::generator::{
     GeneratorDeps, GeneratorSource, MessageGenerator,
 };
 use crate::ai_service::message_system::processor::EmotionSegment;
-use crate::ai_service::screen_analyzer::image_bytes_to_native_data_url;
+use crate::ai_service::screen_analyzer::{NativeImageCompress, image_bytes_to_native_data_url};
 use crate::ai_service::tts::local::LocalTtsState;
 use crate::ai_service::types::{LineAttributeExt, LineBase};
 use crate::api::game::{GameLineInit, compute_user_message_seqs};
@@ -65,6 +65,10 @@ pub async fn send_chat_message(
 
     // 对话模型是否原生识图：开启后把截图当轮直发给模型，跳过旁白转述
     let native_vision = chat_native_vision_supported(&app);
+    // 原生识图图片压缩参数（取自聊天 provider 的压缩设置，默认不压缩原图直发）
+    let native_compress = resolve_chat_provider(&app)
+        .map(|p| p.native_image_compress())
+        .unwrap_or_default();
     // 当轮附带的多模态图片 data URL（原生识图路径专用，不写入记忆）
     let mut transient_image: Option<String> = None;
 
@@ -72,12 +76,12 @@ pub async fn send_chat_message(
     events::emit_thinking(&app, true);
 
     // 截图分析：在创建 GeneratorDeps 之前，确保旁白台词已写入 line_list。
-    // 原生识图开启时优先把压缩后的图片当轮携带发送（省上下文/缓存）；
-    // 图片编码失败或未开启原生识图时，回退到「旁白转述」路径。
+    // 原生识图开启时优先把图片当轮携带发送（默认原图直发，可在 provider 设置里
+    // 开启压缩以省上下文/缓存）；图片编码失败或未开启原生识图时，回退到「旁白转述」路径。
     if let Some(ref b64) = screenshot_base64 {
         if let Ok(image_bytes) = base64::Engine::decode(&base64::prelude::BASE64_STANDARD, b64) {
             if native_vision {
-                transient_image = image_bytes_to_native_data_url(&image_bytes);
+                transient_image = image_bytes_to_native_data_url(&image_bytes, native_compress);
                 if transient_image.is_some() {
                     tracing::info!("[Chat] 原生识图: 截图直接携带当轮发送（不写记忆）。");
                 } else {
@@ -587,14 +591,18 @@ pub async fn feed_image(app: AppHandle, path: String) -> Result<(), String> {
 
     tracing::info!("[FileFeed] 收到图片投喂");
 
-    // 对话模型原生识图：把图片压缩后当轮直发给模型（不写记忆，省上下文/缓存）
+    // 对话模型原生识图：把图片当轮直发给模型（不写记忆，省上下文/缓存）
     let native_vision = chat_native_vision_supported(&app);
+    // 原生识图图片压缩参数（取自聊天 provider 的压缩设置，默认不压缩原图直发）
+    let native_compress = resolve_chat_provider(&app)
+        .map(|p| p.native_image_compress())
+        .unwrap_or_default();
 
     events::emit_thinking(&app, true);
 
     // 原生识图路径：仅写入一条轻量文本提示（图片本身当轮发送，不持久化）
     if native_vision {
-        let transient_image = read_file_native_data_url(&path);
+        let transient_image = read_file_native_data_url(&path, native_compress);
         if let Some(image) = transient_image {
             let mut gs = game_status.lock().await;
             gs.add_line(
@@ -652,10 +660,10 @@ pub async fn feed_image(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 读取图片文件并压缩为原生多模态识图的 data URL（当轮携带，不写记忆）。
-fn read_file_native_data_url(path: &str) -> Option<String> {
+/// 读取图片文件并转换为原生多模态识图的 data URL（当轮携带，不写记忆）。
+fn read_file_native_data_url(path: &str, compress: NativeImageCompress) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
-    image_bytes_to_native_data_url(&bytes)
+    image_bytes_to_native_data_url(&bytes, compress)
 }
 
 #[tauri::command]
