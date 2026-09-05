@@ -799,6 +799,7 @@ mod tests {
             enable_thinking: false,
             reasoning_effort: None,
             fast_mode: false,
+            support_vision: false,
         }
     }
 

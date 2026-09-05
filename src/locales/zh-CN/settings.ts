@@ -1024,6 +1024,8 @@ export default {
       temperature: "Temperature（留空使用默认）",
       topP: "Top P（留空使用默认）",
       enableThinking: "启用思考链（部分模型支持）",
+      supportVision: "支持识图（原生多模态）",
+      supportVisionHint: "勾选后发图/截图可直接走该对话模型识图，不再旁白转述",
       save: "保存",
       cancel: "取消",
     },

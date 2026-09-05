@@ -779,6 +779,32 @@
               </div>
             </label>
 
+            <!-- 支持识图（原生多模态）：勾选后用户发图/截图直接走对话模型，不再旁白转述 -->
+            <div
+              class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5
+                px-3 py-2"
+            >
+              <div class="flex flex-col gap-0.5">
+                <span class="text-xs font-medium text-white/60">{{
+                  $t("settings.llmProviders.form.supportVision")
+                }}</span>
+                <span class="text-[11px] text-white/35">{{
+                  $t("settings.llmProviders.form.supportVisionHint")
+                }}</span>
+              </div>
+              <button
+                type="button"
+                class="relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200"
+                :class="editing.support_vision ? 'bg-brand' : 'bg-white/15'"
+                @click="editing.support_vision = !editing.support_vision"
+              >
+                <span
+                  class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all duration-200"
+                  :class="editing.support_vision ? 'left-[22px]' : 'left-0.5'"
+                ></span>
+              </button>
+            </div>
+
             <!-- Action buttons -->
             <div class="flex gap-3 pt-2">
               <button
@@ -948,6 +974,7 @@
       enable_thinking: false,
       reasoning_effort: null,
       fast_mode: false,
+      support_vision: false,
     };
   }
 

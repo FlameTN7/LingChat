@@ -272,6 +272,77 @@ fn encode_image_base64(bytes: &[u8], mime_type: &str) -> (String, String) {
     (b64, mime_type.to_string())
 }
 
+/// 上限：原生识图发送给对话模型的图片最大边长（像素），超宽图先等比缩放，
+/// 以控制这类模型的输入 token 与缓存占用。
+const NATIVE_IMAGE_MAX_EDGE: u32 = 1024;
+/// JPEG 编码质量：兼顾清晰度与体积（体积直接决定多模态输入的 token 占用）。
+const NATIVE_IMAGE_JPEG_QUALITY: u8 = 85;
+
+/// 把任意图片字节压缩为适合原生多模态识图的 `data:image/jpeg;base64,...` data URL。
+///
+/// - 解码失败 / 超限返回 `None`（调用方自然回退到旁白转述）。
+/// - 统一转 JPEG 并等比缩放到 `NATIVE_IMAGE_MAX_EDGE`，透明通道压到白底，
+///   既减小 base64 体积（token/缓存占用），也避免 WebP/PNG 在某些 OpenAI 兼容
+///   视觉端点上的兼容问题。
+/// - **仅用于当轮请求**，不写入长期记忆（配合 `GeneratorDeps::transient_image`）。
+pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
+    use image::imageops::FilterType;
+    use image::{DynamicImage, GenericImageView, ImageReader};
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+
+    let img = ImageReader::new(std::io::Cursor::new(image_bytes))
+        .with_guessed_format()
+        .ok()?
+        .with_limits(limits)
+        .decode()
+        .ok()?;
+
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    let resized = if w.max(h) > NATIVE_IMAGE_MAX_EDGE {
+        img.resize(NATIVE_IMAGE_MAX_EDGE, NATIVE_IMAGE_MAX_EDGE, FilterType::Lanczos3)
+    } else {
+        img
+    };
+
+    // 透明通道压白，避免半透明图转 JPEG 后出现黑底/花边
+    let rgb = flatten_on_white(&resized);
+
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, NATIVE_IMAGE_JPEG_QUALITY)
+        .encode_image(&DynamicImage::ImageRgb8(rgb))
+        .ok()?;
+    let bytes = out.into_inner();
+
+    let b64 = base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &bytes);
+    Some(format!("data:image/jpeg;base64,{b64}"))
+}
+
+/// 将 RGBA 图像压到白色背景上返回 RGB，供 JPEG 编码前去除透明通道。
+fn flatten_on_white(image: &image::DynamicImage) -> image::ImageBuffer<image::Rgb<u8>, Vec<u8>> {
+    use image::GenericImageView;
+    let rgba = image.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut out = image::ImageBuffer::new(w, h);
+    for (x, y, px) in rgba.enumerate_pixels() {
+        let [r, g, b, a] = px.0;
+        // 线性加权：alpha=255 → 原色，alpha=0 → 白
+        let blend = |c: u8| -> u8 {
+            let c = c as u32;
+            let a = a as u32;
+            ((c * a + 255 * (255 - a)) / 255) as u8
+        };
+        out.put_pixel(x, y, image::Rgb([blend(r), blend(g), blend(b)]));
+    }
+    out
+}
+
 /// 捕获整个桌面并返回 JPEG 格式的字节。
 /// Windows: 使用 GDI (BitBlt + GetDIBits) 捕获，然后压缩为 1024x768 JPEG。
 /// 其他平台: 返回 None。
