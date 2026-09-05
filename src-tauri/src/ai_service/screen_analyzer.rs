@@ -296,7 +296,7 @@ pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
     let img = ImageReader::new(std::io::Cursor::new(image_bytes))
         .with_guessed_format()
         .ok()?
-        .with_limits(limits)
+        .limits(limits)
         .decode()
         .ok()?;
 
@@ -326,7 +326,6 @@ pub fn image_bytes_to_native_data_url(image_bytes: &[u8]) -> Option<String> {
 
 /// 将 RGBA 图像压到白色背景上返回 RGB，供 JPEG 编码前去除透明通道。
 fn flatten_on_white(image: &image::DynamicImage) -> image::ImageBuffer<image::Rgb<u8>, Vec<u8>> {
-    use image::GenericImageView;
     let rgba = image.to_rgba8();
     let (w, h) = rgba.dimensions();
     let mut out = image::ImageBuffer::new(w, h);
