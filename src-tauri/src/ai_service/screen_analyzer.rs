@@ -316,10 +316,13 @@ pub fn image_bytes_to_native_data_url(
 
     // `ImageReader::limits` 就地修改接收者并返回 `()`，不能链式接 `.decode()`，
     // 因此先构造 reader、设置限制、再单独调用 decode（与 read_media_file.rs 一致）。
+    // 注意：`decode` 会消费 reader（`self`），原图直发路径要用格式推断 MIME，
+    // 所以必须在 decode 之前先取回 `format()`。
     let mut reader = ImageReader::new(std::io::Cursor::new(image_bytes))
         .with_guessed_format()
         .ok()?;
     reader.limits(limits);
+    let detected_format = reader.format();
     let img = reader.decode().ok()?;
 
     let (w, h) = img.dimensions();
@@ -329,9 +332,8 @@ pub fn image_bytes_to_native_data_url(
 
     // ─── 原图直发：不缩放不重编码，保留原始格式字节 ───
     if !compress.enabled {
-        let format = reader.format();
         // 根据识别出的真实格式推断 MIME；未知格式统一按 png 兜底。
-        let mime = match format {
+        let mime = match detected_format {
             Some(image::ImageFormat::Jpeg) => "jpeg",
             Some(image::ImageFormat::WebP) => "webp",
             Some(_) | None => "png",
