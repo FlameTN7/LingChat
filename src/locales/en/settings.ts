@@ -1022,6 +1022,8 @@ export default {
       temperature: "Temperature (leave empty for default)",
       topP: "Top P (leave empty for default)",
       enableThinking: "Enable Thinking Chain (supported by some models)",
+      supportVision: "Support Image Understanding (native multimodal)",
+      supportVisionHint: "When enabled, images/screenshots go directly to this chat model instead of the narrator transcription",
       save: "Save",
       cancel: "Cancel",
     },
