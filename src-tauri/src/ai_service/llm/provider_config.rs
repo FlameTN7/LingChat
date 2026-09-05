@@ -39,6 +39,10 @@ pub struct LlmProviderConfig {
     /// Codex Fast Mode（1.5× 速度，额度消耗更快）；仅 provider = codex 时有意义。
     #[serde(default)]
     pub fast_mode: bool,
+    /// 是否支持原生多模态识图（支持把图片直接发给该模型而不用旁白转述）。
+    /// 需要该 provider 的协议能承载图片内容（OpenAI 兼容 image_url / Gemini 多模态）。
+    #[serde(default)]
+    pub support_vision: bool,
 }
 
 impl LlmProviderConfig {
@@ -48,6 +52,16 @@ impl LlmProviderConfig {
     /// 只要求 model 非空。
     pub fn is_usable(&self) -> bool {
         !self.model.is_empty()
+    }
+
+    /// 判断该 provider 是否走 genai 的 OpenAI 兼容 / Gemini 多模态路径，从而
+    /// 能原生承载图片内容。kimi_code / codex 有独立 provider 实现，暂不支持
+    /// 在对话消息里直接注入图片，仍需走旁白转述。
+    pub fn is_genai_multimodal_capable(&self) -> bool {
+        matches!(
+            self.provider.to_lowercase().as_str(),
+            "openai" | "deepseek" | "lmstudio" | "gemini"
+        )
     }
 
     pub fn to_llm_config(&self, timeout_secs: u64) -> LlmConfig {
@@ -62,6 +76,7 @@ impl LlmProviderConfig {
             enable_thinking: self.enable_thinking,
             reasoning_effort: self.reasoning_effort.clone(),
             fast_mode: self.fast_mode,
+            support_vision: self.support_vision,
         }
     }
 }
@@ -297,6 +312,7 @@ pub fn migrate_if_needed(app: &AppHandle) {
             enable_thinking: old_thinking,
             reasoning_effort: None,
             fast_mode: false,
+            support_vision: false,
         });
         chat_id = Some(id);
     }
@@ -332,6 +348,7 @@ pub fn migrate_if_needed(app: &AppHandle) {
                 enable_thinking: false,
                 reasoning_effort: None,
                 fast_mode: false,
+                support_vision: false,
             });
             translate_id = Some(id);
         }
@@ -402,6 +419,7 @@ pub fn migrate_legacy_vision_keys(app: &AppHandle) {
         enable_thinking: false,
         reasoning_effort: None,
         fast_mode: false,
+        support_vision: false,
     };
 
     let mut providers = load_providers(app);

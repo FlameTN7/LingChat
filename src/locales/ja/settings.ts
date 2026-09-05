@@ -1003,6 +1003,8 @@ export default {
       temperature: "Temperature（空欄ならデフォルト）",
       topP: "Top P（空欄ならデフォルト）",
       enableThinking: "思考チェーンを有効化（一部のモデルのみ対応）",
+      supportVision: "画像認識をサポート（ネイティブマルチモーダル）",
+      supportVisionHint: "ONにすると画像・スクリーンショットを直接この対話モデルへ送信し、ナレーターの転述を経由しません",
       save: "保存",
       cancel: "キャンセル",
     },

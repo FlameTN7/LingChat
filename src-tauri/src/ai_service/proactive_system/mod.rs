@@ -260,6 +260,7 @@ impl ProactiveSystem {
                 // 捕获当前试玩代号（自由对话恒等，行为不变）
                 generation: preview_generation,
                 is_preview: false,
+                transient_image: None,
             };
             MessageGenerator::new(deps)
         };
