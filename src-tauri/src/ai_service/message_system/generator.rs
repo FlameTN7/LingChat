@@ -438,9 +438,9 @@ impl MessageGenerator {
         // 原生多模态识图：把当轮图片作为一条独立的用户消息拼进 LLM 上下文，
         // 仅本次请求可见，不回写记忆。放在末尾（紧跟最新用户输入之后的视觉提示），
         // 让模型把图片与最近的用户语境关联起来。
-        let mut context = if let Some(image) = self.deps.transient_image.clone() {
+        let context = if let Some(image) = self.deps.transient_image.clone() {
             let mut ctx = context;
-            let mut gs_guard = self.deps.game_status.lock().await;
+            let gs_guard = self.deps.game_status.lock().await;
             let user_name = gs_guard.player.user_name.clone();
             drop(gs_guard);
             let marker = if user_message.trim().is_empty() {
