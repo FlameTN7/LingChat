@@ -7,8 +7,8 @@ use tokio::time::sleep;
 use super::scripted_provider::ScriptedProvider;
 use crate::ai_service::game_system::auto_save::AutoSaveManager;
 use crate::ai_service::game_system::game_status::GameStatus;
-use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
 use crate::ai_service::game_system::role_manager::GameRoleManager;
+use crate::ai_service::memory::{MemoryConfig, MemorySectionLimits};
 use crate::ai_service::service::AIService;
 use crate::ai_service::types::GameRole;
 use crate::ai_service::types::{GameLine, GameMemoryBank, LineAttributeExt, LineBase};
@@ -70,26 +70,34 @@ pub async fn validate_real(
     // append path must refresh this exact manager, not a disconnected helper
     // PersistentMemorySystem.
     let db = super::temp_db::TemporaryDatabase::open().await?;
-    let _ = db.seed_save_role(role_id, display_name).await?;
+    let (initial_save_id, _) = db.seed_save_role(role_id, display_name).await?;
     let mut manager = GameRoleManager::new(
         db.directory.path().to_path_buf(),
         provider.clone().slot(),
         TtsConfig::default(),
         None,
-        true,
-        update_interval as u32,
-        recent_window as u32,
-        section_limits,
+        MemoryConfig {
+            enabled: true,
+            update_interval,
+            recent_window,
+            limits: section_limits,
+        },
     );
     manager.loaded_roles.insert(
         role_id,
         crate::ai_service::types::GameRole {
             role_id: Some(role_id),
             display_name: Some(display_name.to_string()),
-            memory_bank: initial_bank,
             ..Default::default()
         },
     );
+    // Restore the supplied bank through the same typed repository/load path
+    // used by production saves; GameRole never owns a second bank copy.
+    MemoryRepo::upsert_for_save_role(&db.connection, initial_save_id, role_id, &initial_bank)
+        .await?;
+    manager
+        .load_memory_banks_from_db(&db.connection, initial_save_id, Some(&[role_id]))
+        .await?;
     let mut status = GameStatus::new(manager);
     status.present_role_ids.insert(role_id);
     status.line_list = input_lines.unwrap_or_else(|| lines(role_id, line_count));
@@ -101,7 +109,6 @@ pub async fn validate_real(
             if status
                 .role_manager
                 .memory_snapshot(role_id)
-                .await
                 .is_some_and(|snapshot| snapshot.updating)
                 || provider.calls() > 0
             {
@@ -141,7 +148,6 @@ pub async fn validate_real(
     let first_snapshot = status
         .role_manager
         .memory_snapshot(role_id)
-        .await
         .ok_or_else(|| anyhow!("memory runtime was not initialized"))?;
     let first_processed_idx = first_snapshot.bank.meta.last_processed_global_idx;
     let first_tail_lines = history
@@ -162,7 +168,6 @@ pub async fn validate_real(
         snapshot = status
             .role_manager
             .memory_snapshot(role_id)
-            .await
             .ok_or_else(|| anyhow!("memory runtime disappeared"))?;
         second_batch_committed =
             snapshot.bank.meta.last_processed_global_idx >= history.len() as i64;
@@ -221,10 +226,12 @@ pub async fn validate_late_autosave(
         provider.clone().slot(),
         TtsConfig::default(),
         None,
-        true,
-        1,
-        0,
-        MemorySectionLimits::default(),
+        MemoryConfig {
+            enabled: true,
+            update_interval: 1,
+            recent_window: 0,
+            limits: MemorySectionLimits::default(),
+        },
     );
     manager.loaded_roles.insert(
         seeded_role_id,

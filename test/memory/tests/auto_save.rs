@@ -2,9 +2,9 @@ use crate::ai_service::game_system::auto_save::{
     AutoSaveManager, fingerprint_requires_save, successful_fingerprint,
 };
 use crate::ai_service::game_system::game_status::GameStatus;
-use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
 use crate::ai_service::game_system::role_manager::GameRoleManager;
 use crate::ai_service::llm::LlmSlot;
+use crate::ai_service::memory::{MemoryConfig, MemorySectionLimits};
 use crate::ai_service::service::AIService;
 use crate::ai_service::types::{GameLine, GameMemoryBank, GameRole, LineAttributeExt, LineBase};
 use crate::config::tts::TtsConfig;
@@ -85,10 +85,12 @@ async fn real_autosave_persists_memory_that_finishes_after_line_save() {
         provider.clone().slot(),
         TtsConfig::default(),
         None,
-        true,
-        1,
-        0,
-        MemorySectionLimits::default(),
+        MemoryConfig {
+            enabled: true,
+            update_interval: 1,
+            recent_window: 0,
+            limits: MemorySectionLimits::default(),
+        },
     );
     manager.loaded_roles.insert(
         role_id,
@@ -199,10 +201,12 @@ async fn autosave_uses_one_snapshot_when_memory_commits_during_db_writes() {
         provider.clone().slot(),
         TtsConfig::default(),
         None,
-        true,
-        1,
-        0,
-        MemorySectionLimits::default(),
+        MemoryConfig {
+            enabled: true,
+            update_interval: 1,
+            recent_window: 0,
+            limits: MemorySectionLimits::default(),
+        },
     );
     manager.loaded_roles.insert(
         role_id,

@@ -8,9 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, WebviewWindow};
 use tokio::sync::Mutex;
 
-use crate::ai_service::service::SharedAIService;
-use crate::ai_service::types::{GameLine, GameMemoryBank};
-use crate::db::managers::memory_repo::MemoryRepo;
+use crate::ai_service::service::{SessionSnapshot, SharedAIService};
 use crate::db::managers::save_repo::SaveRepo;
 
 const AUTO_SAVE_PREFIX: &str = "自动存档";
@@ -39,6 +37,34 @@ fn successful_fingerprint(line_hash: u64, revisions: Vec<(i32, u64)>) -> AutoSav
         line_hash,
         memory_revisions: revisions,
     }
+}
+
+/// Derive the auto-save decision from exactly the immutable snapshot that will
+/// be persisted. The preview/formal-session gate is held by the caller.
+fn snapshot_with_fingerprint(
+    snapshot: SessionSnapshot,
+) -> Option<(AutoSaveFingerprint, SessionSnapshot)> {
+    // 初始化时 line_list 自带一条 system 台词（角色人设），
+    // 只有大于 1 条时才说明有实际对话发生，才需要自动存档。
+    if snapshot.lines.len() <= 1 {
+        return None;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    for line in &snapshot.lines {
+        line.base.content.hash(&mut hasher);
+        line.base.sender_role_id.hash(&mut hasher);
+        line.base.attribute.as_str().hash(&mut hasher);
+    }
+    let fingerprint = AutoSaveFingerprint {
+        line_hash: hasher.finish(),
+        memory_revisions: snapshot
+            .memory_banks
+            .iter()
+            .map(|(role_id, _, revision)| (*role_id, *revision))
+            .collect(),
+    };
+    Some((fingerprint, snapshot))
 }
 
 /// Payload emitted to frontend after each successful auto-save.
@@ -138,13 +164,24 @@ impl AutoSaveManager {
 
     /// Perform a save if line_list is non-empty and has changed since last save.
     async fn perform_save(&mut self) -> Result<(), String> {
-        // Capture the fingerprint and the exact lines that will be sent to
-        // sync_lines as one immutable session snapshot. Re-reading line_list
-        // after this point could pair marker A with persisted lines B when an
-        // append/rollback races the save.
-        let (current_fingerprint, lines, memory_snapshots) = match self.compute_snapshot().await {
-            Some(snapshot) => snapshot,
-            None => return Ok(()),
+        // Acquire the same gate used by PreviewSession before inspecting
+        // history, creating/updating the auto-save slot, or writing it. This
+        // makes preview start and AutoSave linearizable instead of relying on
+        // a stale preliminary mode check.
+        let (formal_gate, current_fingerprint, session_snapshot) = {
+            let service = self.ai_service.lock().await;
+            let formal_gate = match service.acquire_formal_session_gate().await {
+                Ok(gate) => gate,
+                Err(_) => {
+                    tracing::debug!("[AutoSave] 跳过试玩期间的正式自动存档");
+                    return Ok(());
+                },
+            };
+            let snapshot = service.capture_guarded_session_snapshot().await;
+            let Some((fingerprint, snapshot)) = snapshot_with_fingerprint(snapshot) else {
+                return Ok(());
+            };
+            (formal_gate, fingerprint, snapshot)
         };
 
         // 2. Find or create the auto-save slot before deciding whether to skip.
@@ -162,55 +199,16 @@ impl AutoSaveManager {
             return Ok(());
         }
 
-        // 4. Perform the actual save
-        let service = self.ai_service.lock().await;
-
-        // 4a. Sync the immutable snapshot captured above (smart diff)
-        SaveRepo::sync_lines(&self.db, save_id, &lines)
-            .await
-            .map_err(|e| format!("同步台词失败: {}", e))?;
-
-        // 4b. Set active save
-        service.game_status.lock().await.active_save_id = Some(save_id);
-
-        // 4c. Write GameStatus snapshot
-        let snapshot = service.game_status.lock().await.to_snapshot();
-        let snapshot_json =
-            serde_json::to_string(&snapshot).map_err(|e| format!("序列化状态失败: {}", e))?;
-        SaveRepo::update_save_status(&self.db, save_id, &snapshot_json)
-            .await
-            .map_err(|e| format!("保存状态失败: {}", e))?;
-
-        // 4d. Persist the immutable bank snapshots without retaining the
-        // GameStatus lock across database awaits. A concurrent commit therefore
-        // cannot make the success marker claim a newer bank was persisted.
-        let mut saved_memory_revisions = Vec::with_capacity(memory_snapshots.len());
-        for (role_id, bank, revision) in &memory_snapshots {
-            let info =
-                serde_json::to_string(bank).map_err(|e| format!("序列化记忆库失败: {}", e))?;
-            MemoryRepo::upsert_memory(&self.db, save_id, *role_id, &info, None)
+        // 4. Persist precisely the immutable snapshot used for this decision.
+        // The service releases GameStatus before DB I/O, so a concurrent memory
+        // commit becomes a distinct next snapshot rather than changing this one.
+        let saved_memory_revisions = {
+            let mut service = self.ai_service.lock().await;
+            service
+                .persist_captured_formal_session(save_id, &session_snapshot)
                 .await
-                .map_err(|e| format!("保存记忆库失败: {}", e))?;
-            saved_memory_revisions.push((*role_id, *revision));
-        }
-
-        // 4e. Persist script state (if running)
-        if let Some(ref script_status) = service.game_status.lock().await.script_status {
-            let vars_json = serde_json::to_string(&script_status.vars)
-                .map_err(|e| format!("序列化剧本状态失败: {}", e))?;
-            SaveRepo::upsert_running_script(
-                &self.db,
-                save_id,
-                &script_status.folder_key,
-                &vars_json,
-                &script_status.current_chapter_key,
-                script_status.current_event_process,
-            )
-            .await
-            .map_err(|e| format!("保存剧本状态失败: {}", e))?;
-        }
-
-        drop(service);
+                .map_err(|e| format!("保存会话失败: {}", e))?
+        };
 
         // 5. Update tracking state only after every required write above succeeds.
         // Replace memory revisions with the revisions captured by the successful
@@ -237,6 +235,7 @@ impl AutoSaveManager {
         }
 
         tracing::info!("[AutoSave] 自动存档完成 save_id={}", save_id);
+        drop(formal_gate);
         Ok(())
     }
 
@@ -277,47 +276,6 @@ impl AutoSaveManager {
     pub fn invalidate_saved_fingerprint(&mut self) {
         self.last_saved_fingerprint = None;
         self.last_saved_save_id = None;
-    }
-
-    /// Capture a stable fingerprint and the exact immutable line snapshot it
-    /// describes. The hash must be computed from the same lines passed to the
-    /// repository, not from a second later lock acquisition.
-    async fn compute_snapshot(
-        &self,
-    ) -> Option<(
-        AutoSaveFingerprint,
-        Vec<GameLine>,
-        Vec<(i32, GameMemoryBank, u64)>,
-    )> {
-        let service = self.ai_service.lock().await;
-        let status = service.game_status.lock().await;
-
-        // 初始化时 line_list 自带一条 system 台词（角色人设），
-        // 只有大于 1 条时才说明有实际对话发生，才需要自动存档。
-        if status.line_list.len() <= 1 {
-            return None;
-        }
-
-        let lines = status.line_list.clone();
-        let mut hasher = DefaultHasher::new();
-        for line in &lines {
-            line.base.content.hash(&mut hasher);
-            line.base.sender_role_id.hash(&mut hasher);
-            line.base.attribute.as_str().hash(&mut hasher);
-        }
-
-        let memory_snapshots = status.role_manager.memory_bank_snapshots().await;
-        Some((
-            AutoSaveFingerprint {
-                line_hash: hasher.finish(),
-                memory_revisions: memory_snapshots
-                    .iter()
-                    .map(|(role_id, _, revision)| (*role_id, *revision))
-                    .collect(),
-            },
-            lines,
-            memory_snapshots,
-        ))
     }
 
     /// Find the existing auto-save slot by title prefix, or create a new one.

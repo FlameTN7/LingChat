@@ -77,14 +77,54 @@ impl TemporaryDatabase {
         Ok((save.id, role.id))
     }
 
+    /// Insert a main role usable only for failure-path validation. It points
+    /// at a missing resource/settings folder, so production lazy loading fails
+    /// after a preview transition has been admitted.
+    pub async fn seed_unloadable_role(&self, role_id: i32, title: &str) -> Result<i32> {
+        Ok(role::ActiveModel {
+            id: Set(role_id),
+            name: Set(title.to_string()),
+            role_type: Set(RoleType::Main),
+            resource_folder: Set(Some("missing-preview-settings".into())),
+            ..Default::default()
+        }
+        .insert(&self.connection)
+        .await?
+        .id)
+    }
+
+    /// Seed a minimal MAIN role that production lazy loading can register.
+    /// The settings file is intentionally local to this temporary data root.
+    pub async fn seed_loadable_main_role(&self, role_id: i32, folder: &str) -> Result<i32> {
+        let path = self
+            .directory
+            .path()
+            .join("game_data/characters")
+            .join(folder);
+        std::fs::create_dir_all(&path)?;
+        std::fs::write(
+            path.join("settings.yml"),
+            format!("ai_name: {folder}\nuser_name: tester\nsystem_prompt: preview persona\n"),
+        )?;
+        Ok(role::ActiveModel {
+            id: Set(role_id),
+            name: Set(folder.to_string()),
+            role_type: Set(RoleType::Main),
+            resource_folder: Set(Some(folder.to_string())),
+            ..Default::default()
+        }
+        .insert(&self.connection)
+        .await?
+        .id)
+    }
+
     pub async fn round_trip(
         &self,
         save_id: i32,
         role_id: i32,
         bank: &GameMemoryBank,
     ) -> Result<GameMemoryBank> {
-        let encoded = serde_json::to_string(bank)?;
-        MemoryRepo::upsert_memory(&self.connection, save_id, role_id, &encoded, None).await?;
+        MemoryRepo::upsert_for_save_role(&self.connection, save_id, role_id, bank).await?;
         let row = MemoryRepo::get_latest_memory(&self.connection, save_id, role_id)
             .await?
             .ok_or_else(|| anyhow!("memory row missing after upsert"))?;

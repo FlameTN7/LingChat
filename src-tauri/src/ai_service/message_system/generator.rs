@@ -9,13 +9,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::ai_service::game_system::game_status::GameStatus;
+use crate::ai_service::game_system::game_status::{GameStatus, HistorySession};
 use crate::ai_service::game_system::scene_store::SceneStore;
 use crate::ai_service::god_agent::GodAgentCore;
 use crate::ai_service::llm::LlmClient;
@@ -26,9 +27,9 @@ use crate::ai_service::message_system::processor::{
 use crate::ai_service::message_system::producer::{SentenceItem, StreamProducer};
 use crate::ai_service::message_system::responses::{ReplyResponse, event_names};
 use crate::ai_service::tools::registry::ToolRegistry;
-use crate::ai_service::tools::tool_loop::stream_with_tool_loop;
+use crate::ai_service::tools::tool_loop::{HistorySessionControl, stream_with_tool_loop};
 use crate::ai_service::translator::Translator;
-use crate::ai_service::types::{GameLine, LineAttributeExt, LineBase, LlmMessage};
+use crate::ai_service::types::{LineAttributeExt, LineBase, LlmMessage};
 use crate::api::data_dir;
 use crate::db::entities::line::LineAttribute;
 use crate::utils::prompt::PromptRole;
@@ -62,13 +63,10 @@ pub struct GeneratorDeps {
     pub god_agent: Option<Arc<GodAgentCore>>,
     /// 抑制 ai:thinking 事件。用于系统触发的后台生成（如入场问候）。
     pub suppress_thinking: bool,
-    /// 构建 deps 时捕获的 `GameStatus.preview_generation`。写入台词前比对，
-    /// 不一致说明本轮生成已过期（试玩被中止后游离任务仍在写），丢弃写入。
-    /// 自由对话的代号恒为当前值，比对恒等，行为不变。
-    pub generation: u64,
-    /// 是否运行在编辑器试玩中。为 true 时回复带 `preview_gen` 标记，
-    /// 前端据此丢弃中止后迟到的流式回复。
-    pub is_preview: bool,
+    /// 构建 deps 前原子捕获的 canonical-history 身份。generation 与 mode
+    /// 必须来自同一个 `GameStatus::history_session()` 快照，避免异步 setup
+    /// 后将旧 generation 和新 mode 撕裂。
+    pub session: HistorySession,
 }
 
 /// `process_message` 各步骤间传递的用户消息上下文。
@@ -79,13 +77,38 @@ struct UserMessageContext {
     seq: Option<u32>,
 }
 
+pub(super) enum PublishItem {
+    Reply {
+        index: usize,
+        response: Option<ReplyResponse>,
+    },
+    BeforeTools {
+        index: usize,
+        ack: oneshot::Sender<bool>,
+    },
+}
+
+impl PublishItem {
+    fn index(&self) -> usize {
+        match self {
+            Self::Reply { index, .. } | Self::BeforeTools { index, .. } => *index,
+        }
+    }
+}
+
 pub struct MessageGenerator {
     deps: GeneratorDeps,
+    /// Internal cancellation hint for concurrent consumers after a conditional
+    /// canonical write is rejected. GameStatus remains the authoritative check.
+    stale: Arc<AtomicBool>,
 }
 
 impl MessageGenerator {
     pub fn new(deps: GeneratorDeps) -> Self {
-        Self { deps }
+        Self {
+            deps,
+            stale: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// 处理一轮用户消息。返回 accumulated LLM 原始输出（便于日志 / 单测）。
@@ -95,6 +118,9 @@ impl MessageGenerator {
     ///
     /// 在多人自由对话模式下（God Agent 激活），会自动循环生成多轮 NPC 对话。
     pub async fn process_message(&self, user_message: Option<String>) -> Result<String> {
+        if !self.is_current_session().await {
+            return Err(anyhow::anyhow!("消息所属会话已过期"));
+        }
         // 1. 处理用户消息
         let user_ctx = self.handle_user_message(user_message.as_deref()).await?;
 
@@ -112,6 +138,12 @@ impl MessageGenerator {
         let original_msg = user_message.unwrap_or_default();
 
         loop {
+            if self.stale.load(Ordering::Acquire) || !self.is_current_session().await {
+                // A stale first write is an error above; after a prior accepted
+                // line, end quietly rather than allowing God/tool loops to
+                // create further work for a replaced canonical history.
+                break;
+            }
             // 取当前角色记忆（每轮重新获取，因为 current_role_id 可能已变化）
             let mut context = self.get_current_context().await?;
             if consecutive_npc_rounds == 0 {
@@ -131,6 +163,9 @@ impl MessageGenerator {
                 .execute_pipeline(context, &original_msg, round_msg_seq)
                 .await?;
             accumulated.push_str(&round_acc);
+            if self.stale.load(Ordering::Acquire) || !self.is_current_session().await {
+                break;
+            }
 
             consecutive_npc_rounds += 1;
 
@@ -149,6 +184,9 @@ impl MessageGenerator {
     /// 通知不会写成玩家台词，避免界面和历史中出现伪造的用户消息。
     #[cfg_attr(not(desktop), allow(dead_code))]
     pub async fn process_notification(&self, notification: String) -> Result<String> {
+        if !self.is_current_session().await {
+            return Err(anyhow::anyhow!("消息所属会话已过期"));
+        }
         let mut context = self.get_current_context().await?;
         if context.is_empty() {
             return Ok(String::new());
@@ -187,7 +225,16 @@ impl MessageGenerator {
             sender_role_id: Some(0),
             ..Default::default()
         };
-        gs.add_line(&self.deps.db, line).await?;
+        if !gs
+            .append_line_if_current(&self.deps.db, self.history_session(), line)
+            .await?
+        {
+            // Do not continue into model/tool work when this request never
+            // entered canonical history. In particular, Preview may have
+            // entered and exited during preprocessing, leaving mode Normal
+            // again but a different generation.
+            return Err(anyhow::anyhow!("消息所属会话已过期"));
+        }
         let seq = Some(
             gs.line_list
                 .iter()
@@ -203,6 +250,12 @@ impl MessageGenerator {
     /// Step 1.5: 检测场景变化，若场景切换则添加系统旁白台词。
     async fn detect_scene_change(&self) -> Result<()> {
         let mut gs = self.deps.game_status.lock().await;
+        // Scene lookup/write is part of this producer's canonical-history
+        // path. Do not update either narration or its processed marker after
+        // Preview replaced the captured session.
+        if !gs.is_history_session_current(self.history_session()) {
+            return Err(anyhow::anyhow!("消息所属会话已过期"));
+        }
         if !gs.scene_awareness_enabled
             || gs.current_scene_id.is_none()
             || gs.current_scene_id == gs.last_processed_scene_id
@@ -225,7 +278,12 @@ impl MessageGenerator {
                     display_name: Some("系统".to_string()),
                     ..Default::default()
                 };
-                let _ = gs.add_line(&self.deps.db, line).await;
+                if !gs
+                    .append_line_if_current(&self.deps.db, self.history_session(), line)
+                    .await?
+                {
+                    return Err(anyhow::anyhow!("消息所属会话已过期"));
+                }
             }
         }
         gs.last_processed_scene_id = gs.current_scene_id.clone();
@@ -293,6 +351,41 @@ impl MessageGenerator {
         }
     }
 
+    async fn is_current_session(&self) -> bool {
+        self.deps.game_status.lock().await.history_session() == self.history_session()
+    }
+
+    fn history_session(&self) -> HistorySession {
+        self.deps.session
+    }
+
+    /// Build the narrow session contract consumed by `tool_loop`. The loop
+    /// receives no `GameStatus` access: it can only reject a stale request or
+    /// obtain one preview/formal permit for a single tool execution.
+    fn history_session_control(&self) -> HistorySessionControl {
+        let game_status = self.deps.game_status.clone();
+        let expected = self.history_session();
+        let is_current = {
+            let game_status = game_status.clone();
+            move || {
+                let game_status = game_status.clone();
+                Box::pin(async move {
+                    game_status
+                        .lock()
+                        .await
+                        .is_history_session_current(expected)
+                })
+            }
+        };
+        let admit_tool_execution = move || {
+            let game_status = game_status.clone();
+            Box::pin(async move {
+                GameStatus::admit_tool_execution_if_current(&game_status, expected).await
+            })
+        };
+        HistorySessionControl::new(is_current, admit_tool_execution)
+    }
+
     // ============================================================
     // 上帝 Agent 集成
     // ============================================================
@@ -311,11 +404,19 @@ impl MessageGenerator {
             return Ok(());
         }
 
-        // 决策下一个说话者
-        let (selected_role_id, reason) = {
+        // Snapshot under GameStatus only if the original session still owns
+        // it, then release that mutex for the director LLM.
+        let Some((messages, npc_ids)) = ({
             let gs = self.deps.game_status.lock().await;
-            god.decide_next_speaker(&gs, current_speaker).await?
+            gs.is_history_session_current(self.history_session())
+                .then(|| god.decision_snapshot(&gs, current_speaker))
+        }) else {
+            return Ok(());
         };
+        let (selected_role_id, reason) = god.decide_next_speaker(messages, npc_ids).await?;
+        if !self.is_current_session().await {
+            return Ok(());
+        }
 
         if selected_role_id == 0 {
             return Ok(()); // 选择玩家，保持现状
@@ -324,6 +425,9 @@ impl MessageGenerator {
         // 设定新的 current_role_id
         let character_name = {
             let mut gs = self.deps.game_status.lock().await;
+            if !gs.is_history_session_current(self.history_session()) {
+                return Ok(());
+            }
             gs.current_role_id = Some(selected_role_id);
             let role = gs.get_role(&self.deps.db, selected_role_id).await?;
             role.display_name.clone().unwrap_or_default()
@@ -368,11 +472,21 @@ impl MessageGenerator {
             return Ok((false, 0));
         }
 
-        // 决策
-        let (selected_role_id, reason) = {
+        // Snapshot under GameStatus only if the original session still owns
+        // it, then release that mutex for the director LLM. A preview switch
+        // while it awaits ends the old generator rather than selecting another
+        // speaker for the restored canonical session.
+        let Some((messages, npc_ids)) = ({
             let gs = self.deps.game_status.lock().await;
-            god.decide_next_speaker(&gs, current_speaker).await?
+            gs.is_history_session_current(self.history_session())
+                .then(|| god.decision_snapshot(&gs, current_speaker))
+        }) else {
+            return Ok((false, 0));
         };
+        let (selected_role_id, reason) = god.decide_next_speaker(messages, npc_ids).await?;
+        if !self.is_current_session().await {
+            return Ok((false, 0));
+        }
 
         if selected_role_id == 0 {
             // 交还玩家
@@ -382,6 +496,9 @@ impl MessageGenerator {
         // 设定下一个说话者
         let character_name = {
             let mut gs = self.deps.game_status.lock().await;
+            if !gs.is_history_session_current(self.history_session()) {
+                return Ok((false, 0));
+            }
             gs.current_role_id = Some(selected_role_id);
             let role = gs.get_role(&self.deps.db, selected_role_id).await?;
             role.display_name.clone().unwrap_or_default()
@@ -433,6 +550,7 @@ impl MessageGenerator {
             self.deps.source,
             role_name,
             &self.deps.app,
+            self.history_session_control(),
         )
         .await?;
         // 惰性工具闭环：工具消息在流消费过程中才逐渐收集完整。
@@ -448,8 +566,8 @@ impl MessageGenerator {
 
         let (sentence_tx, sentence_rx) =
             mpsc::channel::<SentenceItem>(self.deps.concurrency.max(1) * 2);
-        let (publish_tx, mut publish_rx) =
-            mpsc::channel::<(usize, Option<ReplyResponse>)>(self.deps.concurrency.max(1) * 2);
+        let (publish_tx, publish_rx) =
+            mpsc::channel::<PublishItem>(self.deps.concurrency.max(1) * 2);
 
         // producer 与 consumer 共享的思考链缓冲：累积本轮生成的完整思考文本，
         // 由最终句（is_final）的 consumer 快照并挂载到台词行与前端响应。
@@ -457,46 +575,48 @@ impl MessageGenerator {
 
         // publisher：按索引顺序 emit 到前端
         let app = self.deps.app.clone();
-        let publisher = tokio::spawn(async move {
-            let mut next_index = 0usize;
-            let mut buf: HashMap<usize, Option<ReplyResponse>> = HashMap::new();
-            while let Some((idx, resp)) = publish_rx.recv().await {
-                buf.insert(idx, resp);
-                while let Some(item) = buf.remove(&next_index) {
-                    next_index += 1;
-                    if let Some(resp) = item {
-                        let is_final = resp.is_final;
-                        if let Err(e) = app.emit(event_names::AI_REPLY, &resp) {
-                            tracing::warn!("emit ai:reply 失败: {e}");
-                        }
-                        if is_final {
-                            return;
-                        }
-                    }
-                }
-            }
-        });
+        let publisher = tokio::spawn(publish_ordered(publish_rx, move |resp| {
+            app.emit(event_names::AI_REPLY, resp)
+                .map_err(anyhow::Error::from)
+        }));
 
         // consumer 池：并发处理句子
         let sentence_rx = Arc::new(Mutex::new(sentence_rx));
         let concurrency = self.deps.concurrency.max(1);
         let mut consumer_tasks = Vec::with_capacity(concurrency);
+        let stale = self.stale.clone();
         for cid in 0..concurrency {
             let deps = self.deps.clone();
             let sentence_rx = sentence_rx.clone();
             let publish_tx = publish_tx.clone();
             let user_message = user_message.clone();
             let thinking_buf = thinking_buf.clone();
+            let stale = stale.clone();
             consumer_tasks.push(tokio::spawn(async move {
                 // 句子处理仅需最小依赖集；llm / 工具等不在消费端使用。
-                let sdeps = SentenceDeps::from(&deps);
+                let sdeps = SentenceDeps::from_generator(&deps, stale.clone());
                 loop {
                     let item = {
                         let mut rx = sentence_rx.lock().await;
                         rx.recv().await
                     };
-                    let Some((sentence, index, is_final)) = item else {
+                    let Some(item) = item else {
                         break;
+                    };
+                    let (sentence, index, is_final) = match item {
+                        SentenceItem::Reply(sentence, index, is_final) => {
+                            (sentence, index, is_final)
+                        },
+                        SentenceItem::BeforeTools { index, ack } => {
+                            if publish_tx
+                                .send(PublishItem::BeforeTools { index, ack })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        },
                     };
                     let resp = match consume_sentence(
                         &sdeps,
@@ -515,7 +635,12 @@ impl MessageGenerator {
                             None
                         },
                     };
-                    let _ = publish_tx.send((index, resp)).await;
+                    let _ = publish_tx
+                        .send(PublishItem::Reply {
+                            index,
+                            response: resp,
+                        })
+                        .await;
                     if is_final {
                         break;
                     }
@@ -532,71 +657,130 @@ impl MessageGenerator {
             thinking_buf,
             tool_calls_seen,
         );
-        let acc = producer.run().await.context("StreamProducer 失败")?;
+        // Always drain the pipeline after a producer failure: dropping this
+        // function immediately would leave owned consumer/publisher tasks
+        // running against a cancelled stream and can strand a tool fence.
+        let output = producer.run().await.context("StreamProducer 失败");
 
         for t in consumer_tasks {
             let _ = t.await;
         }
-        let _ = publisher.await;
+        let published_final = publisher.await.unwrap_or(false);
+        let output = output?;
 
         // 流已消费完毕，工具消息收集完整：回填到助手回复之前的位置
         let tool_msgs = std::mem::take(&mut *tool_messages.lock().await);
-        if !tool_msgs.is_empty() {
+        if !tool_msgs.is_empty() && !self.stale.load(Ordering::Acquire) {
             let mut gs = self.deps.game_status.lock().await;
-            // 试玩代号守卫：试玩中止后丢弃迟到回填，与 add_assistant_line 行为一致
-            if gs.preview_generation == self.deps.generation {
-                let insert_pos = tool_insert_pos.min(gs.line_list.len());
-                gs.role_manager.rewrite_memory_history(insert_pos).await;
-                let perceived: Vec<i32> = gs.present_role_ids.iter().copied().collect();
-
-                for msg in tool_msgs.iter().rev() {
-                    let (attribute, content, tool_call) = match msg.role.as_str() {
-                        "assistant" => {
-                            let tool_call = msg
-                                .tool_calls
-                                .as_ref()
-                                .map(|calls| serde_json::to_string(calls).unwrap_or_default());
-                            (LineAttribute::Assistant, msg.content.clone(), tool_call)
-                        },
-                        "tool" => (
-                            LineAttribute::Tool,
-                            serde_json::to_string(&serde_json::json!({
-                                "tool_call_id": msg.tool_call_id,
-                                "result": serde_json::from_str::<serde_json::Value>(&msg.content)
-                                    .unwrap_or(serde_json::Value::String(msg.content.clone())),
-                            }))
-                            .unwrap_or_default(),
-                            None,
-                        ),
-                        _ => continue,
-                    };
-                    let line = LineBase {
-                        content,
-                        tool_call,
-                        attribute: LineAttributeExt(attribute),
-                        sender_role_id: None,
-                        display_name: None,
-                        ..Default::default()
-                    };
-                    gs.line_list
-                        .insert(insert_pos, GameLine::from_base(line, perceived.clone()));
-                }
-                gs.refresh_memories(&self.deps.db).await?;
+            let insert_pos = tool_insert_pos.min(gs.line_list.len());
+            // Verify identity and mutate in one GameStatus critical section.
+            // A stale request may not backfill tools after Preview has restored
+            // the formal history, even when the current mode is Normal again.
+            if !gs
+                .insert_lines_if_current(
+                    &self.deps.db,
+                    self.history_session(),
+                    insert_pos,
+                    tool_messages_to_lines(&tool_msgs),
+                )
+                .await?
+            {
+                self.stale.store(true, Ordering::Release);
             }
         }
 
-        // 空回复兜底：模型流没有任何正文时，主动通知前端并重置状态，
-        // 否则界面会一直停在「思考中」
-        if acc.trim().is_empty() {
-            tracing::warn!("LLM 流未产生任何正文内容，重置前端状态");
+        // A tool preamble is deliberately non-final. If post-tool synthesis
+        // yields no displayable sentence, never promote that preamble to a
+        // fake final: explicitly take the established error/reset path.
+        if !self.stale.load(Ordering::Acquire)
+            && self.is_current_session().await
+            && (output.accumulated.trim().is_empty() || !output.sent_final || !published_final)
+        {
+            tracing::warn!("LLM 流没有可完成的最终正文，重置前端状态");
             events::emit_error(
                 &self.deps.app,
-                &anyhow::anyhow!("模型没有返回任何内容，请再试一次"),
+                &anyhow::anyhow!("模型没有返回完整的最终内容，请再试一次"),
             );
         }
 
-        Ok(acc)
+        Ok(output.accumulated)
     }
+}
+
+/// The same ordered publisher is used in production and controlled pipeline
+/// tests. A failed emit closes pending fences rather than admitting tools.
+pub(super) async fn publish_ordered(
+    mut rx: mpsc::Receiver<PublishItem>,
+    mut emit: impl FnMut(&ReplyResponse) -> Result<()> + Send,
+) -> bool {
+    let mut next_index = 0;
+    let mut reply_before_fence = false;
+    let mut pending = HashMap::new();
+    while let Some(item) = rx.recv().await {
+        pending.insert(item.index(), item);
+        while let Some(item) = pending.remove(&next_index) {
+            next_index += 1;
+            match item {
+                PublishItem::Reply {
+                    response: Some(response),
+                    ..
+                } => {
+                    if let Err(error) = emit(&response) {
+                        tracing::warn!("emit ai:reply 失败: {error}");
+                        return false;
+                    }
+                    reply_before_fence = true;
+                    if response.is_final {
+                        return true;
+                    }
+                },
+                PublishItem::Reply { response: None, .. } => {},
+                PublishItem::BeforeTools { ack, .. } => {
+                    let _ = ack.send(reply_before_fence);
+                    reply_before_fence = false;
+                },
+            }
+        }
+    }
+    false
+}
+
+/// Convert tool-loop protocol messages to canonical history lines without
+/// changing their order. `GameStatus::insert_lines` preserves this iterator's
+/// order while correctly reporting the mid-history insertion as a rewrite.
+pub(crate) fn tool_messages_to_lines(
+    tool_msgs: &[LlmMessage],
+) -> impl Iterator<Item = LineBase> + '_ {
+    tool_msgs.iter().filter_map(|msg| {
+        let (attribute, content, tool_call) = match msg.role.as_str() {
+            "assistant" => {
+                let tool_call = msg
+                    .tool_calls
+                    .as_ref()
+                    .map(|calls| serde_json::to_string(calls).unwrap_or_default());
+                (LineAttribute::Assistant, msg.content.clone(), tool_call)
+            },
+            "tool" => (
+                LineAttribute::Tool,
+                serde_json::to_string(&serde_json::json!({
+                    "tool_call_id": msg.tool_call_id,
+                    "result": serde_json::from_str::<serde_json::Value>(&msg.content)
+                        .unwrap_or(serde_json::Value::String(msg.content.clone())),
+                }))
+                .unwrap_or_default(),
+                None,
+            ),
+            _ => return None,
+        };
+        Some(LineBase {
+            content,
+            tool_call,
+            attribute: LineAttributeExt(attribute),
+            sender_role_id: None,
+            display_name: None,
+            ..Default::default()
+        })
+    })
 }
 
 // ============================================================
@@ -611,20 +795,20 @@ pub struct SentenceDeps {
     pub translator: Arc<Translator>,
     pub game_status: Arc<Mutex<GameStatus>>,
     pub db: DatabaseConnection,
-    /// 试玩代号（写入守卫用）。非试玩时传入当前值即可，守卫恒等。
-    pub generation: u64,
-    pub is_preview: bool,
+    /// 句子处理也必须保留 generator/事件原子捕获的完整历史身份。
+    pub session: HistorySession,
+    pub stale: Arc<AtomicBool>,
 }
 
-impl From<&GeneratorDeps> for SentenceDeps {
-    fn from(d: &GeneratorDeps) -> Self {
+impl SentenceDeps {
+    fn from_generator(d: &GeneratorDeps, stale: Arc<AtomicBool>) -> Self {
         Self {
             processor: d.processor.clone(),
             translator: d.translator.clone(),
             game_status: d.game_status.clone(),
             db: d.db.clone(),
-            generation: d.generation,
-            is_preview: d.is_preview,
+            session: d.session,
+            stale,
         }
     }
 }
@@ -651,7 +835,7 @@ pub(crate) async fn consume_sentence(
     thinking_buf: &Mutex<String>,
     overrides: &ReplyOverrides,
 ) -> Result<Option<ReplyResponse>> {
-    if sentence.is_empty() {
+    if sentence.is_empty() || deps.stale.load(Ordering::Acquire) {
         return Ok(None);
     }
 
@@ -683,8 +867,11 @@ pub(crate) async fn consume_sentence(
         }
     }
 
-    // 4. 写入 GameStatus
-    add_assistant_line(deps, &response).await?;
+    // 4. 写入 GameStatus. A stale producer must not emit a reply whose
+    // canonical line was rejected, so treat the conditional no-op as no reply.
+    if !add_assistant_line(deps, &response).await? {
+        return Ok(None);
+    }
 
     Ok(Some(response))
 }
@@ -853,8 +1040,8 @@ async fn build_reply_response(
     response.is_final = is_final;
     response.user_message_seq = user_message_seq;
     // 试玩标记：前端据此丢弃中止后迟到的流式回复（非试玩为 None，不序列化）
-    response.preview_gen = if deps.is_preview {
-        Some(deps.generation)
+    response.preview_gen = if deps.session.is_preview {
+        Some(deps.session.generation)
     } else {
         None
     };
@@ -872,21 +1059,7 @@ async fn build_reply_response(
 }
 
 /// Step D: 将 assistant LINE 写入 GameStatus。
-async fn add_assistant_line(deps: &SentenceDeps, response: &ReplyResponse) -> Result<()> {
-    // 试玩代号守卫：试玩任务被中止后，游离的 consumer 任务仍会带着旧代号继续
-    // 生成句子。此时 GameStatus 可能已还原回自由对话，写入会把试玩台词漏进
-    // 自由对话的上下文与历史。捕获代号与当前值不一致即丢弃整条（含记忆同步）。
-    {
-        let gs = deps.game_status.lock().await;
-        if gs.preview_generation != deps.generation {
-            tracing::warn!(
-                "[Generator] 丢弃过期试玩回复（代号 {} != 当前 {}），试玩已结束",
-                deps.generation,
-                gs.preview_generation
-            );
-            return Ok(());
-        }
-    }
+async fn add_assistant_line(deps: &SentenceDeps, response: &ReplyResponse) -> Result<bool> {
     let line = LineBase {
         content: response.message.clone(),
         sender_role_id: response.role_id,
@@ -902,6 +1075,16 @@ async fn add_assistant_line(deps: &SentenceDeps, response: &ReplyResponse) -> Re
         ..Default::default()
     };
     let mut gs = deps.game_status.lock().await;
-    gs.add_line(&deps.db, line).await?;
-    Ok(())
+    let appended = gs
+        .append_line_if_current(&deps.db, deps.session, line)
+        .await?;
+    if !appended {
+        deps.stale.store(true, Ordering::Release);
+        tracing::warn!(
+            "[Generator] 丢弃过期回复（generation={}, preview={}）；canonical history 已切换",
+            deps.session.generation,
+            deps.session.is_preview
+        );
+    }
+    Ok(appended)
 }

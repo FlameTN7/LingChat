@@ -16,5 +16,11 @@ mod api_tests;
 #[path = "tests/compression.rs"]
 mod compression_tests;
 #[cfg(test)]
+#[path = "tests/history.rs"]
+mod history_tests;
+#[cfg(test)]
 #[path = "tests/persistence.rs"]
 mod persistence_tests;
+#[cfg(test)]
+#[path = "tests/tool_backfill.rs"]
+mod tool_backfill_tests;

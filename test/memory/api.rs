@@ -15,7 +15,7 @@ use tokio::sync::{Notify, oneshot};
 use super::harness::{validate_late_autosave, validate_real};
 use super::scenarios;
 use super::scripted_provider::ScriptedProvider;
-use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
+use crate::ai_service::memory::MemorySectionLimits;
 use crate::ai_service::types::{GameLine, GameMemoryBank};
 
 #[derive(Clone)]
