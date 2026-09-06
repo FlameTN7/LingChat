@@ -240,13 +240,13 @@ impl ProactiveSystem {
         let _lock = self.generation_lock.lock().await;
         events::emit_thinking(&self.app, true);
 
+        let (game_status, session) = {
+            let svc = self.ai_service.lock().await;
+            let gs = svc.game_status.clone();
+            let session = gs.lock().await.history_session();
+            (gs, session)
+        };
         let generator = {
-            let (game_status, preview_generation) = {
-                let svc = self.ai_service.lock().await;
-                let gs = svc.game_status.clone();
-                let gen = gs.lock().await.preview_generation;
-                (gs, gen)
-            };
             let deps = GeneratorDeps {
                 source: GeneratorSource::Proactive,
                 app: self.app.clone(),
@@ -261,10 +261,9 @@ impl ProactiveSystem {
                 concurrency: 1,
                 god_agent: None,
                 suppress_thinking: false,
-                // 捕获当前试玩代号（自由对话恒等，行为不变）
-                generation: preview_generation,
-                is_preview: false,
-                // 屏幕感知原生识图时，把截图当轮直发给对话模型（不写记忆，省上下文/缓存）
+                // 会话身份由上方原子捕获的 `session` 承载（含 preview generation/mode）。
+                // 屏幕感知原生识图时，把截图当轮直发给对话模型（不写记忆，省上下文/缓存）。
+                session,
                 transient_image,
             };
             MessageGenerator::new(deps)
@@ -273,17 +272,24 @@ impl ProactiveSystem {
         {
             let svc = self.ai_service.lock().await;
             let mut gs = svc.game_status.lock().await;
-            gs.add_line(
-                &self.db,
-                LineBase {
-                    attribute: LineAttributeExt(LineAttribute::User),
-                    content: prompt,
-                    sender_role_id: None,
-                    display_name: None,
-                    ..Default::default()
-                },
-            )
-            .await?;
+            if !gs
+                .append_line_if_current(
+                    &self.db,
+                    session,
+                    LineBase {
+                        attribute: LineAttributeExt(LineAttribute::User),
+                        content: prompt,
+                        sender_role_id: None,
+                        display_name: None,
+                        ..Default::default()
+                    },
+                )
+                .await?
+            {
+                tracing::debug!("[ProactiveSystem] discarded stale proactive prompt");
+                events::emit_thinking(&self.app, false);
+                return Ok(());
+            }
         }
 
         let _ = generator.process_message(None).await;
