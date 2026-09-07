@@ -8,7 +8,7 @@
 //! - 头：`Authorization: Bearer`、`chatgpt-account-id`、`originator`、
 //!   `OpenAI-Beta: responses=experimental`、`accept: text/event-stream`
 //! - 体：`store:false, stream:true, instructions, input, include:[reasoning.encrypted_content]`，
-//!   `reasoning:{effort, summary:"auto"}`（Default/Off 档整体省略），
+//!   `reasoning:{effort, summary:"auto"}`（Default 仅省略 effort；Off 省略 reasoning），
 //!   Fast Mode（1.5×）= `service_tier:"priority"`
 //! - 推理档位映射：`minimal→low`，`xhigh/max` 原样，其余原样
 
@@ -27,6 +27,8 @@ use crate::ai_service::llm::provider::{LlmModelInfo, LlmProvider, LlmResponseWit
 use crate::ai_service::llm::{ChunkStream, LlmChunk, LlmConfig, LlmUsage};
 use crate::ai_service::types::{FunctionCall, LlmMessage, ToolCall, ToolDefinition};
 use crate::utils::proxy::build_proxied_client;
+
+use super::reasoning::ReasoningBuffer;
 
 const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_MODEL: &str = "gpt-5.6-sol";
@@ -96,7 +98,7 @@ impl CodexProvider {
         Ok(headers)
     }
 
-    /// reasoning effort 映射：default/off/None → 省略 reasoning 字段；
+    /// reasoning effort 映射：default/off/None → 省略 effort 字段；
     /// minimal→low；xhigh/max 及其余原样（dsh-codex/pi-ai 同款映射表）。
     fn mapped_effort(&self) -> Option<String> {
         let effort = self.reasoning_effort.as_deref()?.trim().to_lowercase();
@@ -171,6 +173,13 @@ impl CodexProvider {
 
         if let Some(effort) = self.mapped_effort() {
             body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+        } else if !self
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| effort.trim().eq_ignore_ascii_case("off"))
+        {
+            // Server-default effort still needs an explicit request for a visible summary.
+            body["reasoning"] = json!({ "summary": "auto" });
         }
         if self.fast_mode {
             body["service_tier"] = json!("priority");
@@ -279,8 +288,8 @@ impl CodexProvider {
             let mut finished_calls: Vec<ToolCall> = Vec::new();
             let mut usage: Option<LlmUsage> = None;
             let mut end_reason: Option<String> = None;
-            // 思考链累积：流末打到日志窗口（与 [Kimi-Code Thinking] 行为对齐）
-            let mut thinking_buffer = String::new();
+            let mut thinking_buffer = ReasoningBuffer::default();
+            let mut reasoning_tokens = 0;
             let mut byte_stream = resp.bytes_stream();
 
             'outer: while let Some(item) = byte_stream.next().await {
@@ -308,17 +317,14 @@ impl CodexProvider {
                         continue;
                     };
                     let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    // Process completed snapshots before the final response ends the stream.
+                    for delta in thinking_buffer.consume(&event) {
+                        yield LlmChunk::Reasoning(delta);
+                    }
                     match event_type {
                         "response.output_text.delta" => {
                             if let Some(delta) = event.get("delta").and_then(|d| d.as_str()) {
                                 yield LlmChunk::Content(delta.to_string());
-                            }
-                        }
-                        "response.reasoning_summary_text.delta"
-                        | "response.reasoning_text.delta" => {
-                            if let Some(delta) = event.get("delta").and_then(|d| d.as_str()) {
-                                thinking_buffer.push_str(delta);
-                                yield LlmChunk::Reasoning(delta.to_string());
                             }
                         }
                         "response.output_item.added" => {
@@ -375,6 +381,8 @@ impl CodexProvider {
                         }
                         "response.completed" | "response.incomplete" => {
                             if let Some(u) = event.pointer("/response/usage") {
+                                reasoning_tokens = u.pointer("/output_tokens_details/reasoning_tokens")
+                                    .and_then(Value::as_u64).unwrap_or(0);
                                 usage = Some(LlmUsage {
                                     prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                                     completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -404,8 +412,10 @@ impl CodexProvider {
             }
 
             // 流末日志：思考链汇总 + token 用量（对齐 [Kimi-Code Thinking] 的日志窗口行为）
-            if !thinking_buffer.is_empty() {
-                tracing::info!("[Codex Thinking] {}", thinking_buffer);
+            if !thinking_buffer.text().is_empty() {
+                tracing::info!("[Codex Thinking] {}", thinking_buffer.text());
+            } else if reasoning_tokens > 0 {
+                tracing::info!("[Codex] 已使用 {reasoning_tokens} 个推理 token，但服务端未返回可显示的推理摘要");
             }
             if let Some(u) = usage {
                 tracing::info!(
