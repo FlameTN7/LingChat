@@ -596,6 +596,10 @@ pub fn run() {
 
                 tauri::async_runtime::spawn(async move {
                     let mut was_ignored = false;
+                    // 上一次向前端广播的鼠标位置：挂机时鼠标不动，若仍 20Hz 无条件
+                    // emit，webview 渲染进程会被 IPC 持续唤醒而无法进入空闲。
+                    // 只有位移超过 1 逻辑像素（过滤亚像素抖动）才真正广播。
+                    let mut last_emitted: Option<(f64, f64)> = None;
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -630,13 +634,25 @@ pub fn run() {
                                 // pointermove 在鼠标移出窗口后停发，Live2D 视线会冻结在
                                 // 最后一次窗口内位置。这里把窗口内逻辑坐标（即 webview
                                 // 视口坐标）发给前端驱动视线，与 DOM clientX/Y 同坐标系。
-                                let _ = window.emit(
-                                    "pet:cursor",
-                                    api::pet::CursorPosition {
-                                        x: logical_x,
-                                        y: logical_y,
-                                    },
-                                );
+                                // 视线弹簧在前端 ticker 内持续插值，广播间隔变大不影响
+                                // 追踪平滑度，因此只在位移 ≥1px 时发送。
+                                let moved = match last_emitted {
+                                    Some((lx, ly)) => {
+                                        (logical_x - lx).abs() >= 1.0
+                                            || (logical_y - ly).abs() >= 1.0
+                                    }
+                                    None => true,
+                                };
+                                if moved {
+                                    let _ = window.emit(
+                                        "pet:cursor",
+                                        api::pet::CursorPosition {
+                                            x: logical_x,
+                                            y: logical_y,
+                                        },
+                                    );
+                                    last_emitted = Some((logical_x, logical_y));
+                                }
 
                                 let mut is_over_solid = false;
                                 if let Ok(rects) = rects_arc.lock() {
