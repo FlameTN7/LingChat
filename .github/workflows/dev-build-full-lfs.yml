@@ -1,0 +1,65 @@
+name: 构建开发版（全量LFS·Windows）
+
+# 一次性人工测试专用：pet-cpu-perf 的桌宠 CPU 优化需要真实角色资源实测，
+# 与常规 dev-build/dev-build-full 的区别：
+# - git lfs pull 全量拉取（常规工作流 lfs:false，角色图片/Live2D 纹理全是指针文件）
+# - artifact 同时上传 exe + target/release/data/ 资源目录（--no-bundle 下资源在
+#   exe 旁边，只传 exe 会丢 game_data）
+# 仅 Windows 单平台（用户实测机器为 Windows；三平台编译已由 dev-build.yml 验证）
+# ⚠️ 该文件仅存在于临时 fullci 分支，不进入 PR
+
+on:
+  # workflow_dispatch 只认默认分支注册的工作流，临时分支走 push 触发
+  push:
+    branches: [pet-cpu-perf-fullci]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # 不指定 version：package.json 已声明 packageManager，再指定会冲突
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: 安装 rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 设置 rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+              ./src-tauri
+          cache-targets: true
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-main-pnpm-tauri-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: pnpm 安装依赖
+        run: pnpm i
+
+      - name: 拉取 LFS 大文件并生成图标/初始化资源
+        shell: bash
+        run: |
+          # 全量拉取 LFS（角色立绘/头像/Live2D 纹理/背景/音乐均为 LFS 对象），
+          # 不带参数确保全部下载；checkout 默认只给指针文件
+          git lfs pull
+          pnpm run init
+
+      - name: 构建应用
+        env:
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C linker=rust-lld' || '' }}
+        run: pnpm tauri build --no-bundle
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingchat-petperf-full-windows
+          path: |
+            src-tauri/target/release/ling_chat.exe
+            src-tauri/target/release/data/
+          retention-days: 7
