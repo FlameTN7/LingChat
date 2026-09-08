@@ -9,8 +9,8 @@ use genai::Client as GenaiClient;
 use genai::ServiceTarget;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, StopReason,
-    ToolCall as GenaiToolCall, ToolChoice, ToolResponse,
+    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, ReasoningEffort,
+    StopReason, ToolCall as GenaiToolCall, ToolChoice, ToolResponse,
 };
 use genai::resolver::{AuthData, Endpoint};
 use reqwest::Client;
@@ -20,12 +20,13 @@ use crate::ai_service::llm::{ChunkStream, LlmChunk, LlmConfig, LlmUsage};
 use crate::ai_service::types::{LlmMessage, ToolDefinition};
 
 // ─── Provider ────────────────────────────────────────────────────
-// 钦灵：为了修复 DeepSeek 问题，我在这里预留了两个字段，以备将来使用。
+// 钦灵：为了修复 DeepSeek 问题，我在这里预留了字段，以备将来使用。
+// （provider 现用于 #787 的剥名规避门控；_reasoning_effort 仍预留未接线）
 
 pub struct GenaiProvider {
     client: GenaiClient,
     model: String,
-    _provider: String,
+    provider: String,
     temperature: Option<f64>,
     top_p: Option<f64>,
     enable_thinking: bool,
@@ -115,7 +116,7 @@ impl GenaiProvider {
         Ok(Self {
             client: builder.build(),
             model,
-            _provider: cfg.provider.to_lowercase(),
+            provider: cfg.provider.to_lowercase(),
             temperature: cfg.temperature,
             top_p: cfg.top_p,
             enable_thinking: cfg.enable_thinking,
@@ -205,6 +206,20 @@ impl GenaiProvider {
         }
         if let Some(p) = self.top_p {
             opts = opts.with_top_p(p);
+        }
+
+        // issue #787：genai 的 OpenAI 系 adapter（openai/lmstudio/deepseek 共用剥名逻辑）
+        // 在未显式设置 reasoning_effort 时，会用 ReasoningEffort::from_model_name 从模型名
+        // 尾部剥掉 effort 关键字（如 gemini-3.8-flash-high → gemini-3.8-flash 并附带
+        // reasoning_effort=high），导致按完整名注册渠道的中转服务商报 model_not_found。
+        // 显式传入 Budget(_) 可让 adapter 保留完整模型名；而 insert_openai_reasoning_effort
+        // 对 Budget 变体提前返回，不会向请求体注入 reasoning_effort 字段——请求体与原样
+        // 透传完全一致。仅探测后缀是否命中关键字，不采用其推断值；Gemini 原生 adapter 的
+        // 后缀推断是有意设计，此处不介入。
+        if matches!(self.provider.as_str(), "openai" | "lmstudio" | "deepseek")
+            && ReasoningEffort::from_model_name(&self.model).0.is_some()
+        {
+            opts = opts.with_reasoning_effort(ReasoningEffort::Budget(0));
         }
 
         // DeepSeek Reasoner 等模型在 thinking 字段缺失时默认启用思考，
