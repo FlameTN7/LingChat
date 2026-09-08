@@ -1010,6 +1010,7 @@ export default {
       fetchModels: "自动获取",
       fetchingModels: "获取中...",
       reasoningEffort: "推理深度（部分模型支持）",
+      thinkingLevel: "思考等级（仅开启思考模式时生效）",
       reasoningDefault: "默认（跟随模型）",
       effortLow: "Low（低）",
       effortMedium: "Medium（中）",

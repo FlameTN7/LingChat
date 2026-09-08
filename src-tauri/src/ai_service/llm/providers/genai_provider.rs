@@ -21,7 +21,7 @@ use crate::ai_service::types::{LlmMessage, ToolDefinition};
 
 // ─── Provider ────────────────────────────────────────────────────
 // 钦灵：为了修复 DeepSeek 问题，我在这里预留了字段，以备将来使用。
-// （provider 现用于 #787 的剥名规避门控；_reasoning_effort 仍预留未接线）
+// （provider 现用于 #787 的剥名规避门控；reasoning_effort 为思考等级，仅开启思考时下发）
 
 pub struct GenaiProvider {
     client: GenaiClient,
@@ -30,7 +30,7 @@ pub struct GenaiProvider {
     temperature: Option<f64>,
     top_p: Option<f64>,
     enable_thinking: bool,
-    _reasoning_effort: Option<String>,
+    reasoning_effort: Option<String>,
     /// 是否 MiniMax 兼容接口（base_url 或模型名含 minimax）。
     /// MiniMax 的 OpenAI 兼容 API 只接受 thinking.type = "adaptive" / "disabled"，
     /// 传 "enabled" 会直接 400 报错（invalid thinking.type），需单独映射。
@@ -120,7 +120,7 @@ impl GenaiProvider {
             temperature: cfg.temperature,
             top_p: cfg.top_p,
             enable_thinking: cfg.enable_thinking,
-            _reasoning_effort: cfg.reasoning_effort.clone(),
+            reasoning_effort: cfg.reasoning_effort.clone(),
             is_minimax: cfg.base_url.to_lowercase().contains("minimax")
                 || cfg.model.to_lowercase().contains("minimax"),
         })
@@ -208,6 +208,17 @@ impl GenaiProvider {
             opts = opts.with_top_p(p);
         }
 
+        // 用户配置的思考等级（low/medium/high/xhigh/max）：仅开启思考模式时生效。
+        // MiniMax 兼容接口不支持调档（thinking.type 只认 adaptive/disabled），不下发。
+        // 显式设置 effort 还会让 OpenAI 系 adapter 保留完整模型名，天然规避 #787 的剥名。
+        let user_effort = if self.enable_thinking && !self.is_minimax {
+            self.reasoning_effort
+                .as_deref()
+                .and_then(ReasoningEffort::from_keyword)
+        } else {
+            None
+        };
+
         // issue #787：genai 的 OpenAI 系 adapter（openai/lmstudio/deepseek 共用剥名逻辑）
         // 在未显式设置 reasoning_effort 时，会用 ReasoningEffort::from_model_name 从模型名
         // 尾部剥掉 effort 关键字（如 gemini-3.8-flash-high → gemini-3.8-flash 并附带
@@ -216,7 +227,9 @@ impl GenaiProvider {
         // 对 Budget 变体提前返回，不会向请求体注入 reasoning_effort 字段——请求体与原样
         // 透传完全一致。仅探测后缀是否命中关键字，不采用其推断值；Gemini 原生 adapter 的
         // 后缀推断是有意设计，此处不介入。
-        if matches!(self.provider.as_str(), "openai" | "lmstudio" | "deepseek")
+        if let Some(effort) = user_effort {
+            opts = opts.with_reasoning_effort(effort);
+        } else if matches!(self.provider.as_str(), "openai" | "lmstudio" | "deepseek")
             && ReasoningEffort::from_model_name(&self.model).0.is_some()
         {
             opts = opts.with_reasoning_effort(ReasoningEffort::Budget(0));
