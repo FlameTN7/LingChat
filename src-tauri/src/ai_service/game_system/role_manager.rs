@@ -16,7 +16,6 @@ use crate::config::tts::TtsConfig;
 use crate::db::entities::line::LineAttribute;
 use crate::db::managers::memory_repo::MemoryRepo;
 use crate::db::managers::role_repo::RoleRepo;
-use crate::utils::path::resolve_character_path;
 
 /// 角色运行时管理器：维护当前活跃角色的内存状态。
 pub struct GameRoleManager {
@@ -145,10 +144,6 @@ impl GameRoleManager {
         let role_ids: Vec<i32> = self.loaded_roles.keys().copied().collect();
         let mut ok = 0usize;
         for role_id in role_ids {
-            let resource_path = self
-                .loaded_roles
-                .get(&role_id)
-                .and_then(|r| r.resource_path.clone());
             let settings =
                 match RoleRepo::get_role_settings_by_id(db, &self.data_dir, role_id).await {
                     Ok(Some(s)) => s,
@@ -157,7 +152,6 @@ impl GameRoleManager {
             let Some(vm) = build_voice_maker(
                 &self.data_dir,
                 &settings,
-                resource_path.as_deref(),
                 &self.tts_config,
                 self.local_tts.as_ref(),
             ) else {
@@ -198,7 +192,6 @@ impl GameRoleManager {
         let voice_maker = build_voice_maker(
             &self.data_dir,
             &settings,
-            resource_path.as_deref(),
             &self.tts_config,
             self.local_tts.as_ref(),
         );
@@ -497,19 +490,14 @@ impl GameRoleManager {
         role_id: i32,
         settings: &CharacterSettings,
     ) -> bool {
-        let Some(resource_path) = self
-            .loaded_roles
-            .get(&role_id)
-            .map(|role| role.resource_path.clone())
-        else {
+        if !self.loaded_roles.contains_key(&role_id) {
             tracing::info!("角色 {} 尚未加载，TTS 设置将在下次加载时生效", role_id);
             return false;
-        };
+        }
 
         let voice_maker = build_voice_maker(
             &self.data_dir,
             settings,
-            resource_path.as_deref(),
             &self.tts_config,
             self.local_tts.as_ref(),
         );
@@ -685,7 +673,6 @@ impl GameRoleManager {
 fn build_voice_maker(
     data_dir: &Path,
     settings: &CharacterSettings,
-    resource_path: Option<&str>,
     tts_config: &TtsConfig,
     local_tts: Option<&LocalTtsRuntime>,
 ) -> Option<VoiceMaker> {
@@ -711,9 +698,6 @@ fn build_voice_maker(
     vm.set_local_runtime(local_tts.cloned());
     vm.set_lang(&lang);
     vm.set_voice_dialect(settings.voice_dialect.clone());
-    if let Some(p) = resource_path {
-        vm.set_character_path(Some(resolve_character_path(data_dir, p)));
-    }
     match vm.set_tts_settings(&voice_cfg, tts_type, &settings.ai_name) {
         Ok(()) => Some(vm),
         Err(e) => {
