@@ -872,6 +872,51 @@
               </template>
             </div>
 
+            <!-- 思考等级：始终显示，仅在开启思考模式时可调整（OAuth 提供商走上方按模型能力渲染的下拉） -->
+            <div v-if="!isOAuthProvider" class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-white/60">{{
+                $t("settings.llmProviders.form.thinkingLevel")
+              }}</label>
+              <div class="relative">
+                <select
+                  v-model="editing.reasoning_effort"
+                  :disabled="!editing.enable_thinking"
+                  class="focus:border-brand w-full cursor-pointer appearance-none rounded-lg border
+                    border-white/20 bg-white/10 py-2 pr-8 pl-3 text-sm text-white transition-colors
+                    outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option :value="null" class="bg-gray-800 text-white">
+                    {{ $t("settings.llmProviders.form.reasoningDefault") }}
+                  </option>
+                  <option
+                    v-for="effort in thinkingLevelOptions"
+                    :key="effort"
+                    :value="effort"
+                    class="bg-gray-800 text-white"
+                  >
+                    {{ effortLabel(effort) }}
+                  </option>
+                </select>
+                <div
+                  class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5"
+                >
+                  <svg
+                    class="h-4 w-4 text-white/40"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
             <!-- Action buttons -->
             <div class="flex gap-3 pt-2">
               <button
@@ -1068,6 +1113,9 @@
   });
   const showReasoningEffort = computed(() => reasoningEffortOptions.value.length > 0);
 
+  // 非 OAuth 提供商的思考等级固定档位（仅开启思考模式时生效，见后端 GenaiProvider 接线）
+  const thinkingLevelOptions = ["low", "medium", "high", "xhigh", "max"];
+
   function effortLabel(effort: string): string {
     const labels: Record<string, string> = {
       off: t("settings.llmProviders.form.effortOff"),
@@ -1086,7 +1134,7 @@
   // 但 Kimi Code 模型列表尚未加载时无法判断能力，先保留已配置值，待列表返回后再决定
   watch([() => editing.provider, () => editing.model], () => {
     if (isOAuthProvider.value && availableModels.value.length === 0) return;
-    const options = reasoningEffortOptions.value;
+    const options = isOAuthProvider.value ? reasoningEffortOptions.value : thinkingLevelOptions;
     if (
       options.length === 0 ||
       (editing.reasoning_effort && !options.includes(editing.reasoning_effort))
