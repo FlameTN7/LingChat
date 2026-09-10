@@ -306,7 +306,12 @@
     </div>
 
     <!-- ========== RIGHT: Slide-in Panel ========== -->
-    <Transition name="slide">
+    <Transition
+      enter-active-class="transition duration-[350ms] ease-[cubic-bezier(0.18,0.89,0.32,1)]"
+      enter-from-class="translate-x-10 opacity-0"
+      leave-active-class="transition duration-[250ms] ease-[cubic-bezier(0.6,-0.28,0.74,0.05)]"
+      leave-to-class="translate-x-10 opacity-0"
+    >
       <div
         v-if="sidePanel"
         class="flex min-h-0 flex-col"
@@ -724,7 +729,7 @@
               >
                 <span
                   class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all duration-200"
-                  :class="editing.fast_mode ? 'left-[22px]' : 'left-0.5'"
+                  :class="editing.fast_mode ? 'left-5.5' : 'left-0.5'"
                 ></span>
               </button>
             </div>
@@ -1357,24 +1362,3 @@
     stopCodexPolling();
   });
 </script>
-
-<style scoped>
-  .slide-enter-active {
-    transition:
-      transform 0.35s ease-[cubic-bezier(0.18, 0.89, 0.32, 1)],
-      opacity 0.35s ease;
-  }
-  .slide-leave-active {
-    transition:
-      transform 0.25s ease-[cubic-bezier(0.6, -0.28, 0.74, 0.05)],
-      opacity 0.25s ease;
-  }
-  .slide-enter-from {
-    transform: translateX(40px);
-    opacity: 0;
-  }
-  .slide-leave-to {
-    transform: translateX(40px);
-    opacity: 0;
-  }
-</style>
