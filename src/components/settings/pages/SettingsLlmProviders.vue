@@ -985,7 +985,7 @@
       id: "",
       label: "",
       provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       api_key: "",
       base_url: "https://api.deepseek.com",
       temperature: null,
@@ -1056,7 +1056,7 @@
   function onProviderChange() {
     resetModelList();
     if (editing.provider === "deepseek") {
-      editing.model = "deepseek-v4-flash";
+      editing.model = "deepseek-flash";
       editing.base_url = "https://api.deepseek.com";
     } else if (editing.provider === "lmstudio") {
       editing.base_url = "http://localhost:1234/v1";
