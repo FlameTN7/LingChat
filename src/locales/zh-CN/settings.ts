@@ -662,6 +662,8 @@ export default {
       openFolder: "打开文件夹",
       delete: "删除",
       edit: "编辑场景",
+      refresh: "刷新",
+      refreshSuccess: "场景列表已刷新",
       noDescription: "暂无描述（选择后不会触发旁白）",
       tip: "提示",
       noDescriptionTip: '场景"{name}"暂无描述，选择后不会触发场景旁白',
