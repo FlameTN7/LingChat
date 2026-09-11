@@ -950,7 +950,7 @@
     lmstudioAutoFilled.value = false;
     kimicodeAutoFilled.value = false;
     resetModelList();
-    // Codex 预设：直接拉内置模型目录并刷新登录状态
+    // Codex 预设：获取账号模型目录并刷新登录状态
     if (preset.provider === "codex") {
       fetchProviderModels();
       refreshCodexStatus();
@@ -966,6 +966,7 @@
   const kimicodeAutoFilled = ref(false);
   const availableModels = ref<LlmModelInfo[]>([]);
   const loadingModels = ref(false);
+  let modelRequestId = 0;
   const modelsMessage = ref("");
   const modelsError = ref(false);
 
@@ -1002,6 +1003,7 @@
   }
 
   function closePanel() {
+    resetModelList();
     sidePanel.value = null;
     saveMessage.value = "";
   }
@@ -1040,7 +1042,7 @@
   // 切到不可调档的模型/提供商时清掉已选档位，避免残留值被静默发往其他模型；
   // 已选档位不在新模型的档位列表中时同样清空（跟随新模型默认）。
   // 但 Kimi Code 模型列表尚未加载时无法判断能力，先保留已配置值，待列表返回后再决定
-  watch([() => editing.provider, () => editing.model], () => {
+  watch([() => editing.provider, () => editing.model, reasoningEffortOptions], () => {
     if (isOAuthProvider.value && availableModels.value.length === 0) return;
     const options = isOAuthProvider.value ? reasoningEffortOptions.value : thinkingLevelOptions;
     if (
@@ -1052,6 +1054,8 @@
   });
 
   function resetModelList() {
+    modelRequestId++;
+    loadingModels.value = false;
     availableModels.value = [];
     modelsMessage.value = "";
     modelsError.value = false;
@@ -1072,7 +1076,7 @@
       editing.base_url = "https://api.kimi.com/coding";
       kimicodeAutoFilled.value = true;
     } else if (editing.provider === "codex") {
-      // Codex：OAuth 订阅，无需 key/base_url；模型走内置目录自动发现
+      // Codex：OAuth 订阅，无需 key/base_url；模型从登录账号在线发现
       editing.model = "gpt-5.6-sol";
       editing.base_url = "";
       editing.api_key = "";
@@ -1118,7 +1122,7 @@
     if (editing.provider === "kimicode" && editing.api_key.trim()) {
       fetchProviderModels();
     }
-    // Codex 模型目录内置在 provider 中（无需密钥），直接拉取；同时刷新登录状态
+    // Codex 复用订阅登录凭据获取模型目录；同时刷新登录状态
     if (editing.provider === "codex") {
       fetchProviderModels();
       refreshCodexStatus();
@@ -1164,17 +1168,20 @@
   async function fetchProviderModels() {
     if (loadingModels.value) return;
 
+    const requestId = ++modelRequestId;
     loadingModels.value = true;
     modelsMessage.value = "";
     modelsError.value = false;
     try {
       const models = await listLlmModels({ ...editing });
+      if (requestId !== modelRequestId) return;
       availableModels.value = models;
       if (!models.some((model) => model.id === editing.model)) {
         editing.model = models[0]?.id ?? editing.model;
       }
       modelsMessage.value = t("settings.llmProviders.msg.modelsFetched", { count: models.length });
     } catch (error: any) {
+      if (requestId !== modelRequestId) return;
       availableModels.value = [];
       // 命令返回结构化 { code, detail }：code → i18n 文案，detail = 原始错误
       const code = error?.code || "other";
@@ -1182,7 +1189,7 @@
       modelsMessage.value = t(`stores.llmErrors.${code}`) + (raw ? `\n原始错误：${raw}` : "");
       modelsError.value = true;
     } finally {
-      loadingModels.value = false;
+      if (requestId === modelRequestId) loadingModels.value = false;
     }
   }
 
@@ -1315,6 +1322,10 @@
               codexLoginError.value = false;
               codexLoginMessage.value = t("settings.llmProviders.codex.loginSuccess");
               await refreshCodexStatus();
+              if (editing.provider === "codex") {
+                resetModelList();
+                await fetchProviderModels();
+              }
             }
           } catch (e: any) {
             stopCodexPolling();
@@ -1351,6 +1362,7 @@
       /* 本地文件清理失败可忽略 */
     }
     await refreshCodexStatus();
+    if (editing.provider === "codex") resetModelList();
   }
 
   onMounted(async () => {
@@ -1359,6 +1371,7 @@
   });
 
   onUnmounted(() => {
+    modelRequestId++;
     stopCodexPolling();
   });
 </script>
