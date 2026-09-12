@@ -876,7 +876,8 @@
                   @click="editing.vision_compress = !editing.vision_compress"
                 >
                   <span
-                    class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all duration-200"
+                    class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all
+                      duration-200"
                     :class="editing.vision_compress ? 'left-[22px]' : 'left-0.5'"
                   ></span>
                 </button>
@@ -894,8 +895,8 @@
                     step="64"
                     min="64"
                     max="8192"
-                    class="focus:border-brand rounded-lg border border-white/20 bg-white/10 px-3 py-2
-                      text-sm text-white transition-colors outline-none"
+                    class="focus:border-brand rounded-lg border border-white/20 bg-white/10 px-3
+                      py-2 text-sm text-white transition-colors outline-none"
                   />
                   <span class="text-[11px] text-white/30">{{
                     $t("settings.llmProviders.form.visionMaxEdgeHint")
@@ -912,8 +913,8 @@
                     type="number"
                     min="1"
                     max="100"
-                    class="focus:border-brand rounded-lg border border-white/20 bg-white/10 px-3 py-2
-                      text-sm text-white transition-colors outline-none"
+                    class="focus:border-brand rounded-lg border border-white/20 bg-white/10 px-3
+                      py-2 text-sm text-white transition-colors outline-none"
                   />
                   <span class="text-[11px] text-white/30">{{
                     $t("settings.llmProviders.form.visionQualityHint")
