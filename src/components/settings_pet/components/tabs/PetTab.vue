@@ -230,8 +230,8 @@
               :value="customFpsInput"
               :placeholder="t('pet.petTab.live2dFpsCustom')"
               @change="onCustomFpsChange"
-              class="w-24 rounded-lg border px-3 py-2 text-sm font-medium outline-none
-                transition-colors"
+              class="w-24 rounded-lg border px-3 py-2 text-sm font-medium transition-colors
+                outline-none"
               :class="[
                 isCustomFpsActive
                   ? 'border-sky-500 text-sky-500'
@@ -246,7 +246,8 @@
           </div>
         </div>
 
-        <div class="mt-6 flex justify-end border-t pt-4 transition-colors"
+        <div
+          class="mt-6 flex justify-end border-t pt-4 transition-colors"
           :class="isDarkMode ? 'border-slate-700' : 'border-slate-100/80'"
         >
           <button

@@ -27,7 +27,8 @@ export default {
     volumeTitle: "ペットの音量",
     volumeReset: "デフォルト音量に戻す",
     live2dFpsTitle: "Live2D 描画フレームレート",
-    live2dFpsDesc: "キャラアニメのフレームレートを制限するとアイドル時のCPU使用率を大幅に下げられます（0・未入力 = 無制限）",
+    live2dFpsDesc:
+      "キャラアニメのフレームレートを制限するとアイドル時のCPU使用率を大幅に下げられます（0・未入力 = 無制限）",
     live2dFpsUnlimited: "無制限",
     live2dFpsCustom: "カスタム",
     live2dFpsReset: "デフォルトに戻す",
