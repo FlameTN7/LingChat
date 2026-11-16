@@ -149,6 +149,13 @@ html {
   background: transparent;
 }
 
+/* Linux 主窗口（及日志/投屏等非透明窗）：不透明深色底，配合 tauri.linux 关 transparent。
+   带 linux-transparent-window 的气泡/设置窗保持透明，桌宠路由由 PetMode 自行改 inline。 */
+html.linux:not(.linux-transparent-window),
+html.linux:not(.linux-transparent-window) body {
+  background: #0f172a;
+}
+
 #app {
   /* 视口口径统一为动态视口（dvw/dvh，iOS 全屏态下 dvw 横屏自动排除左右安全区、dvh 竖屏含上下安全区）：
      #app 铺满整个视觉视口（含状态栏/Home 指示器区域），使各屏壁纸全出血显示；

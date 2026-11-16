@@ -2,6 +2,17 @@
   "build": {
     "beforeBundleCommand": "node scripts/prepare-linux-libs.mjs"
   },
+  "app": {
+    "windows": [
+      {
+        "title": "LingChat",
+        "width": 1500,
+        "height": 800,
+        "transparent": false,
+        "shadow": false
+      }
+    ]
+  },
   "bundle": {
     "linux": {
       "deb": {

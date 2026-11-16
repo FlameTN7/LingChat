@@ -18,6 +18,13 @@ export function isWindows(): boolean {
   return /windows/i.test(navigator.userAgent);
 }
 
+/** 是否 Linux 桌面端（UA 含 Linux，且排除 Android）。
+ *  与设置页等处的 `/linux/i && !/android/i` 判断保持一致，供 WebKitGTK 性能分支使用。 */
+export function isLinux(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+}
+
 /** 是否 iOS（WKWebView UA 含 iPhone/iPad/iPod；现代 iPadOS 桌面版 UA 为
  *  MacIntel + 多点触控）。用于「仅 iOS 生效」的安全区/键盘适配分支判断。 */
 export function isIOS(): boolean {

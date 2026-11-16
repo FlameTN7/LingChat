@@ -19,9 +19,11 @@ import router from "./router";
 import { installRouteFade } from "./composables/app/useRouteFade";
 import { autoConfigurePerformance } from "./api/services/cpu-perf";
 import { initAudioOutputManager } from "./utils/audioOutputManager";
+import { isLinux } from "./utils/platform";
 
 // 仅主窗口启动时清除加载过渡标记，避免设置窗口等其他窗口误清除
-if (getCurrentWindow().label === "main") {
+const currentWindowLabel = getCurrentWindow().label;
+if (currentWindowLabel === "main") {
   localStorage.removeItem("lingchat_loading_shown");
 }
 
@@ -36,6 +38,20 @@ const windowKind = new URLSearchParams(window.location.search).get("window");
 const isCastWindow = windowKind === "cast";
 const isBubbleWindow = windowKind === "bubble";
 const isTodoWidgetWindow = windowKind === "todo_widget";
+
+// Linux WebKitGTK：主窗口已关闭 transparent，给非透明需求窗口铺不透明底，
+// 避免默认透明 html/body 在合成路径上额外开销。桌宠气泡 / 桌宠设置窗仍需透明。
+if (isLinux()) {
+  const needsTransparentBg =
+    isBubbleWindow || currentWindowLabel === "pet_bubble" || currentWindowLabel === "settings";
+  document.documentElement.classList.add("linux");
+  if (needsTransparentBg) {
+    document.documentElement.classList.add("linux-transparent-window");
+  } else {
+    document.documentElement.style.backgroundColor = "#0f172a";
+    document.body.style.backgroundColor = "#0f172a";
+  }
+}
 
 // 主菜单立绘是首屏 LCP 元素。生产构建由 vite 插件在 index.html 静态注入 preload；
 // dev 下没有这一步，这里补一个运行时预加载。独立窗口不渲染主菜单，跳过。
