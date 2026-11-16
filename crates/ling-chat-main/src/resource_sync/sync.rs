@@ -1,4 +1,4 @@
-//! 资源同步核心逻辑 — 从 resource_dir 的 .official/ 复制文件到 data/。
+//! 资源同步核心逻辑 — 从 .official/ 复制文件到 data/。
 //!
 //! 仅涉及本地文件操作，不走网络。
 
@@ -7,6 +7,7 @@ use std::path::Path;
 
 use tracing::info;
 
+use crate::data_dir::{resolve_official_source, OfficialSource};
 use crate::manifest::DataManifest;
 
 use super::ResourceSyncResult;
@@ -40,13 +41,15 @@ pub fn seed_full_from_official(data_dir: &Path, official_dir: &Path) -> anyhow::
     Ok(())
 }
 
-/// 从 .official/game_data/ 复制用户选中的文件到 data/game_data/，
-/// 更新本地 manifest，最后删除 .official/。
+/// 从官方 .official/game_data/ 复制用户选中的文件到 data/game_data/，
+/// 更新本地 manifest；可写源最后删除 .official/，只读源保留。
 pub fn apply_selected_files(
     data_dir: &Path,
     selected_files: &[String],
 ) -> anyhow::Result<ResourceSyncResult> {
-    let official_dir = data_dir.join(".official");
+    let official = resolve_official_source()
+        .ok_or_else(|| anyhow::anyhow!("未找到官方资源目录 (.official)"))?;
+    let official_dir = official.path();
     let official_manifest_path = official_dir.join("data_manifest.json");
 
     let official_manifest = DataManifest::load(&official_manifest_path)
@@ -104,16 +107,25 @@ pub fn apply_selected_files(
         synced += 1;
     }
 
-    // 更新清单版本号
+    // 更新清单版本号（本地 data_manifest 即「已同步版本」记录）
     local_manifest.data_version = official_manifest.data_version;
     local_manifest.save(&local_manifest_path)?;
 
-    // 清理 .official/
-    std::fs::remove_dir_all(&official_dir)?;
-    info!(
-        "Synced {} files, .official removed, data_version={}",
-        synced, local_manifest.data_version
-    );
+    match &official {
+        OfficialSource::Writable(path) => {
+            std::fs::remove_dir_all(path)?;
+            info!(
+                "Synced {synced} files, .official removed, data_version={}",
+                local_manifest.data_version
+            );
+        },
+        OfficialSource::Readonly(_) => {
+            info!(
+                "Synced {synced} files, readonly .official kept, data_version={}",
+                local_manifest.data_version
+            );
+        },
+    }
 
     Ok(ResourceSyncResult {
         success: true,
@@ -137,9 +149,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
         let dst_path = dst.join(entry.file_name());
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
+        } else if file_type.is_file() {
             std::fs::copy(&src_path, &dst_path)?;
         }
+        // 跳过软链，避免只读安装源或恶意链逃逸
     }
     Ok(())
 }

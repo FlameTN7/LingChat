@@ -1,6 +1,6 @@
 //! 本地资源同步模块。
 //!
-//! 将安装包自带的默认资源（`data/.official/`）同步到工作目录（`data/`）。
+//! 将安装包自带的默认资源（`.official/`）同步到工作目录（`data/`）。
 //!
 //! 设计对比：
 //! - `data_update`（将被删除）：从 GitHub Release 下载 → 解压 → 合并，网络依赖
@@ -19,7 +19,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 use tracing::info;
 
-use crate::data_dir::get_data_dir;
+use crate::data_dir::{get_data_dir, resolve_official_source, OfficialSource};
 use crate::manifest::DataManifest;
 
 // ─── 状态 ────────────────────────────────────────────────────
@@ -68,15 +68,25 @@ pub struct ResourceSyncResult {
 
 /// 检查是否有可用的数据资源更新。
 ///
-/// 对比 `data/.official/data_manifest.json`（安装包版本）与
-/// `data/data_manifest.json`（本地工作副本），仅返回 add 和 modify。
+/// 对比官方 `data_manifest.json` 与本地工作副本；官方源可能是可写的
+/// `data/.official/`，也可能是系统安装的只读 `resource_dir/data/.official/`。
 #[tauri::command]
 pub async fn check_resource_sync() -> Result<ResourceSyncInfo, String> {
     let data_dir = get_data_dir().clone();
-    let official_manifest_path = data_dir.join(".official").join("data_manifest.json");
     let local_manifest_path = data_dir.join("data_manifest.json");
 
-    // .official 不存在 → 无更新
+    let Some(official) = resolve_official_source() else {
+        return Ok(ResourceSyncInfo {
+            available: false,
+            new_version: 0,
+            current_version: 0,
+            files_to_add: vec![],
+            files_to_modify: vec![],
+            total_size: 0,
+        });
+    };
+
+    let official_manifest_path = official.path().join("data_manifest.json");
     if !official_manifest_path.exists() {
         return Ok(ResourceSyncInfo {
             available: false,
@@ -103,13 +113,17 @@ pub async fn check_resource_sync() -> Result<ResourceSyncInfo, String> {
         }
     };
 
-    // 版本已是最新 → 清理残留 .official
+    // 版本已是最新 → 仅清理可写残留 .official；只读源绝不动
     if official_manifest.data_version <= local_manifest.data_version {
         info!(
-            "数据已是最新 (local={}, resource={}), 清理残留 .official",
-            local_manifest.data_version, official_manifest.data_version
+            "数据已是最新 (local={}, resource={}), readonly={}",
+            local_manifest.data_version,
+            official_manifest.data_version,
+            official.is_readonly()
         );
-        let _ = std::fs::remove_dir_all(data_dir.join(".official"));
+        if let OfficialSource::Writable(path) = &official {
+            let _ = std::fs::remove_dir_all(path);
+        }
         return Ok(ResourceSyncInfo {
             available: false,
             new_version: official_manifest.data_version,
@@ -176,8 +190,8 @@ pub async fn check_resource_sync() -> Result<ResourceSyncInfo, String> {
 
 /// 应用选中的文件同步。
 ///
-/// 将指定文件从 `data/.official/game_data/` 复制到 `data/game_data/`，
-/// 更新 `data/data_manifest.json`，完成后删除 `data/.official/`。
+/// 将指定文件从官方 `.official/game_data/` 复制到 `data/game_data/`，
+/// 更新 `data/data_manifest.json`；可写源完成后删除，只读源保留。
 #[tauri::command]
 pub async fn apply_resource_sync(
     _app: AppHandle,
