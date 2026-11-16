@@ -115,21 +115,26 @@ jobs:
             ${{ runner.os == 'macOS' && '' || '' }}
         run: pnpm tauri build --no-bundle
 
+      # Linux 裸二进制缺 data/ 无法按发布布局运行，改为便携 tar.gz
+      - name: 打 Linux 便携包
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/package-linux-portable.sh target/release "${{ runner.temp }}/dist"
+
       - name: 收集产物（Windows 附带 onnxruntime.dll 与 DirectML.dll）
         shell: bash
         run: |
           mkdir -p "${{ runner.temp }}/dist"
-          cp "${{ matrix.artifact-path }}" "${{ runner.temp }}/dist/"
+          # Linux 已由便携包步骤产出 tar.gz/.sha256，不再上传裸二进制
+          if [ "${{ runner.os }}" != "Linux" ]; then
+            cp "${{ matrix.artifact-path }}" "${{ runner.temp }}/dist/"
+          fi
           # DirectML.dll 是 DML EP 的运行时依赖，缺了它选 GPU 会静默回落 CPU
           for dll in onnxruntime.dll DirectML.dll; do
             if [ "${{ runner.os }}" = "Windows" ] && [ -f "target/release/$dll" ]; then
               cp "target/release/$dll" "${{ runner.temp }}/dist/"
             fi
           done
-          # 同理，Linux x86_64 的 WebGPU EP 依赖 Dawn 动态库，放 exe 同目录由 RPATH 的 $ORIGIN 命中
-          if [ "${{ runner.os }}" = "Linux" ] && [ -e "target/release/libwebgpu_dawn.so" ]; then
-            cp -L "target/release/libwebgpu_dawn.so" "${{ runner.temp }}/dist/"
-          fi
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4

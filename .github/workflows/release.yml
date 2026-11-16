@@ -139,6 +139,18 @@ jobs:
           # 导致后续产物（.sig 等）丢失。改由下方独立 step 按白名单上传安装包。
           args: ${{ matrix.target }}
 
+      # 便携包：exe + data/.official + data/third_party + .portable + Dawn（若有）
+      # 产物名 LingChat-<ver>-linux-<arch>.tar.gz，与 AUR lingchat-bin 的 source URL 对齐。
+      - name: 打 Linux 便携包
+        if: runner.os == 'Linux' && always()
+        shell: bash
+        run: |
+          if [[ ! -x target/release/ling_chat ]]; then
+            echo "跳过便携包：缺少 target/release/ling_chat" >&2
+            exit 0
+          fi
+          bash scripts/package-linux-portable.sh target/release dist-portable
+
       - name: 上传构建产物（仅安装包与更新签名）
         if: always()
         uses: actions/upload-artifact@v4
@@ -149,6 +161,7 @@ jobs:
           # - `bundle/macos/LingChat.app/`：解包目录，含全部依赖库
           # 这些都不是分发文件，通配进来会让 artifact 与 Release 多出几百 MB 无用内容。
           # Linux 不上传 updater .sig（createUpdaterArtifacts=false）；Win/mac 仍会产出 .sig。
+          # dist-portable/ 为 Linux 便携 tar.gz 与旁路 .sha256。
           path: |
             target/release/bundle/*/*.deb
             target/release/bundle/*/*.rpm
@@ -157,6 +170,8 @@ jobs:
             target/release/bundle/*/*.exe
             target/release/bundle/*/*.tar.gz
             target/release/bundle/*/*.sig
+            dist-portable/*.tar.gz
+            dist-portable/*.sha256
           if-no-files-found: warn
 
   release:
