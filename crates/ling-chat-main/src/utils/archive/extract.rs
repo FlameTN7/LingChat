@@ -171,7 +171,7 @@ pub fn extract_sevenz(
         let raw_name = entry.name().to_string();
         let uncompressed = entry.size();
         let compressed = entry.compressed_size;
-        if is_sevenz_symlink_attrs(entry.attributes()) {
+        if is_sevenz_symlink_attrs(entry.windows_attributes()) {
             summary.warnings.push(format!("跳过符号链接: {raw_name}"));
             processed += 1;
             entry_index += 1;
@@ -260,6 +260,12 @@ pub fn extract_sevenz(
         }
         if entry.has_stream() {
             continue; // 已在第一遍处理。
+        }
+        if is_sevenz_symlink_attrs(entry.windows_attributes()) {
+            summary
+                .warnings
+                .push(format!("跳过符号链接: {}", entry.name));
+            continue;
         }
         let raw_name = entry.name.clone();
         let size = entry.size;
