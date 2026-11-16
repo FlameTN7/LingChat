@@ -186,10 +186,9 @@ WebGPU EP 依赖的 Dawn 无法静态链接，ort 把它作为 `libwebgpu_dawn.s
 | ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | 可执行文件 | `src-tauri/build.rs`                                       | 给 bin 写 RPATH：`$ORIGIN`、`$ORIGIN/../lib`、`$ORIGIN/../lib/LingChat/lib`           |
 | 打包       | `scripts/prepare-linux-libs.mjs` + `tauri.linux.conf.json` | 打包前把库解引用复制到 `src-tauri/linux-libs/`，映射进 deb 的 `/usr/lib/LingChat/lib` |
-| CI         | `release.yml` 的 linux-amd64 步骤                          | 额外拷进构建机系统库目录，让 linuxdeploy 能解析该依赖                                 |
 
-RPATH 覆盖三种运行形态：开发态库在 exe 同目录、AppImage 里在 `usr/lib/LingChat/lib`、
-deb 安装后在 `/usr/bin/../lib/LingChat/lib`。目录不存在时动态加载器静默跳过。
+RPATH 覆盖开发态（exe 同目录）、便携/兼容布局（`$ORIGIN/../lib`）与
+deb 安装态（`/usr/lib/LingChat/lib`）。目录不存在时动态加载器静默跳过。
 
 纯 CPU 的 Linux aarch64 不链接 Dawn，脚本找不到库会留空目录，不影响打包。
 新增第三方运行期库时改 `RUNTIME_LIBS` 数组即可。
