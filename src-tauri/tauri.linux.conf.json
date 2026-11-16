@@ -3,13 +3,9 @@
     "beforeBundleCommand": "node scripts/prepare-linux-libs.mjs"
   },
   "bundle": {
+    "createUpdaterArtifacts": false,
     "linux": {
       "deb": {
-        "files": {
-          "/usr/lib/LingChat/lib": "linux-libs"
-        }
-      },
-      "appimage": {
         "files": {
           "/usr/lib/LingChat/lib": "linux-libs"
         }

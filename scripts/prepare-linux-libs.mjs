@@ -6,7 +6,7 @@
  * 路径，绝不能进安装包，所以这里解引用复制成实体文件。
  *
  * 由 tauri.linux.conf.json 的 beforeBundleCommand 调用；该配置同时把本目录映射进
- * deb / AppImage，可执行文件靠 build.rs 写入的 RPATH 从那里加载。
+ * deb 的 /usr/lib/LingChat/lib，可执行文件靠 build.rs 写入的 RPATH 从那里加载。
  * 纯 CPU 的架构（如 Linux aarch64）没有这类库，目录留空即可。
  *
  * 新增第三方运行期库时，加进 RUNTIME_LIBS 即可。

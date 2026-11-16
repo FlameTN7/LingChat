@@ -10,7 +10,7 @@ LingChat 是一个 AI Galgame 引擎，一个桌面 AI 聊天伴侣 / 桌宠应�
 - pnpm tauri dev：以开发模式运行完整桌面应用
 - pnpm dev：仅启动 Vite 开发服务器，针对已在运行的 Rust 后端进行纯前端迭代
 - pnpm build：前端类型检查和生产构建（必须使用此命令检查前端，不得加tail/head等）
-- pnpm tauri build：完整桌面打包，生成 NSIS / dmg / deb / AppImage + 更新器产物
+- pnpm tauri build：完整桌面打包，生成 NSIS / dmg / deb +（Win/mac）更新器产物；Linux 另有便携 tar.gz（CI 后续补齐）
 - pnpm format/pnpm format:check：prettier和cargo fmt
 - pnpm check:rs：cargo check --workspace -测试 — `cargo test --workspace`，没有前端测试框架
 - pnpm init：生成应用图标，准备桌面资源，下载情绪与文本嵌入 ONNX 模型，并准备 Windows 的 ONNX Runtime DLL。

@@ -182,11 +182,11 @@ WebGPU EP 依赖的 Dawn 无法静态链接，ort 把它作为 `libwebgpu_dawn.s
 
 分三段配合解决：
 
-| 环节       | 位置                                                       | 作用                                                                                             |
-| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 可执行文件 | `src-tauri/build.rs`                                       | 给 bin 写 RPATH：`$ORIGIN`、`$ORIGIN/../lib`、`$ORIGIN/../lib/LingChat/lib`                      |
-| 打包       | `scripts/prepare-linux-libs.mjs` + `tauri.linux.conf.json` | 打包前把库解引用复制到 `src-tauri/linux-libs/`，映射进 deb / AppImage 的 `/usr/lib/LingChat/lib` |
-| CI         | `release.yml` 的 linux-amd64 步骤                          | 额外拷进构建机系统库目录，让 linuxdeploy 能解析该依赖                                            |
+| 环节       | 位置                                                       | 作用                                                                                  |
+| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 可执行文件 | `src-tauri/build.rs`                                       | 给 bin 写 RPATH：`$ORIGIN`、`$ORIGIN/../lib`、`$ORIGIN/../lib/LingChat/lib`           |
+| 打包       | `scripts/prepare-linux-libs.mjs` + `tauri.linux.conf.json` | 打包前把库解引用复制到 `src-tauri/linux-libs/`，映射进 deb 的 `/usr/lib/LingChat/lib` |
+| CI         | `release.yml` 的 linux-amd64 步骤                          | 额外拷进构建机系统库目录，让 linuxdeploy 能解析该依赖                                 |
 
 RPATH 覆盖三种运行形态：开发态库在 exe 同目录、AppImage 里在 `usr/lib/LingChat/lib`、
 deb 安装后在 `/usr/bin/../lib/LingChat/lib`。目录不存在时动态加载器静默跳过。

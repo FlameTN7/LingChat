@@ -9,7 +9,7 @@ fn main() {
 ///
 /// 这里给可执行文件写入三条搜索路径：
 /// - `$ORIGIN`：开发态与便携态，库与 exe 同目录（ort 的 copy-dylibs 会放在这里）
-/// - `$ORIGIN/../lib`：AppImage 的 usr/lib（linuxdeploy 收集的依赖库在此）
+/// - `$ORIGIN/../lib`：兼容历史布局与部分打包工具把依赖放到 usr/lib 的情况
 /// - `$ORIGIN/../lib/LingChat/lib`：deb 安装态，库随资源落到 /usr/lib/LingChat/lib
 ///
 /// 只作用于 bin target，不影响依赖 rlib；目录不存在时动态加载器会静默跳过。
