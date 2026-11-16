@@ -25,10 +25,17 @@ const RUNTIME_LIBS = ["libwebgpu_dawn.so"];
 
 // beforeBundleCommand 在 debug 构建时带 TAURI_ENV_DEBUG=true；release 优先，
 // debug 作为兜底（本地只构建过 debug 时也能打包）。
+// 较新 Cargo 的 OUT_DIR 多了一层 crate 名，ort copy-dylibs 的 ancestors(3)
+// 会落到 target/<profile>/build/；旧布局仍在 target/<profile>/。两处都查。
 const profileDirs =
   process.env.TAURI_ENV_DEBUG === "true"
-    ? ["target/debug"]
-    : ["target/release", "target/debug"];
+    ? ["target/debug", "target/debug/build"]
+    : [
+        "target/release",
+        "target/release/build",
+        "target/debug",
+        "target/debug/build",
+      ];
 
 if (process.platform !== "linux") {
   console.log("[linux-libs] 非 Linux 平台，跳过");

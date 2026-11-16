@@ -53,9 +53,19 @@ chmod +x "${STAGE}/ling_chat"
 cp -aL "${TARGET_DIR}/data" "${STAGE}/data"
 
 # ort webgpu 的 Dawn 动态库（目前主要 linux-amd64 生成）
-# ort 在 target 下放的常是指向 ~/.cache/ort.pyke.io/... 的软链，必须解引用
-if [[ -e "${TARGET_DIR}/libwebgpu_dawn.so" ]]; then
-  cp -Lp "${TARGET_DIR}/libwebgpu_dawn.so" "${STAGE}/"
+# ort copy-dylibs 在较新 Cargo 下可能落到 target/<profile>/build/（OUT_DIR 多了一层 crate 名），
+# 旧布局则在 target/<profile>/；均为指向 ~/.cache/ort.pyke.io/... 的软链，必须解引用
+DAWN_SRC=""
+for candidate in \
+  "${TARGET_DIR}/libwebgpu_dawn.so" \
+  "${TARGET_DIR}/build/libwebgpu_dawn.so"; do
+  if [[ -e "${candidate}" ]]; then
+    DAWN_SRC="${candidate}"
+    break
+  fi
+done
+if [[ -n "${DAWN_SRC}" ]]; then
+  cp -Lp "${DAWN_SRC}" "${STAGE}/libwebgpu_dawn.so"
 fi
 
 # 便携标记：运行期优先走 exe 旁 data/，不落到 XDG
@@ -158,7 +168,6 @@ data/ 下。整个目录可随意移动或改名，只要 ling_chat 与 data/ �
 - webkit2gtk-4.1（Debian/Ubuntu: libwebkit2gtk-4.1-0）
 - GTK 3
 - libayatana-appindicator（系统托盘）
-- OpenSSL
 - PipeWire（屏幕采集相关）
 - Vulkan ICD 加载器（WebGPU / GPU 枚举；无独显时仍建议安装）
 

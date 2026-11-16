@@ -11,19 +11,18 @@ url='https://github.com/SlimeBoyOwO/LingChat'
 license=('AGPL-3.0-only')
 provides=('lingchat')
 conflicts=('lingchat')
-# 运行期依赖依据：
-# - webkit2gtk-4.1 / gtk3：Tauri WebView
-# - libayatana-appindicator：托盘（tray-icon → libappindicator）
-# - openssl：传递依赖 native-tls / ureq（以最终二进制 NEEDED 为准，发布后可用 readelf 复核）
-# - pipewire：屏幕采集 xcap → pipewire
-# - vulkan-icd-loader：WebGPU/Dawn 与 GPU 枚举动态加载 libvulkan
+# 运行期依赖依据（对本机 target/release/ling_chat 的 readelf/ldd/字符串交叉核对）：
+# - webkit2gtk-4.1 / gtk3：NEEDED（libwebkit2gtk-4.1 / libgtk-3）
+# - libayatana-appindicator：二进制内 dlopen 名（libayatana-appindicator3.so.1），托盘用
+# - pipewire：xcap → pipewire-sys（Wayland 采集；--as-needed 下可能不进 NEEDED，功能仍需要）
+# - vulkan-icd-loader：二进制内动态加载 libvulkan.so.1（GPU 枚举 / Dawn）
 # - hicolor-icon-theme：桌面图标主题
-# 不含 alsa-lib：Cargo.lock 无 alsa/cpal 直接依赖；CI 仅作构建期开发包
+# 不含 openssl：最终二进制无 libssl/libcrypto NEEDED（主路径 rustls）
+# 不含 alsa-lib：无 alsa/cpal 依赖与 NEEDED
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
   'libayatana-appindicator'
-  'openssl'
   'pipewire'
   'vulkan-icd-loader'
   'hicolor-icon-theme'
