@@ -18,6 +18,13 @@ export function isWindows(): boolean {
   return /windows/i.test(navigator.userAgent);
 }
 
+/** 是否 Linux 桌面端（UA 含 Linux，且排除 Android）。
+ *  与设置页等处的 `/linux/i && !/android/i` 判断保持一致，供 WebKitGTK 性能分支使用。 */
+export function isLinux(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+}
+
 /** 是否 iOS（WKWebView UA 含 iPhone/iPad/iPod；现代 iPadOS 桌面版 UA 为
  *  MacIntel + 多点触控）。用于「仅 iOS 生效」的安全区/键盘适配分支判断。 */
 export function isIOS(): boolean {
@@ -36,14 +43,6 @@ export function isMacOS(): boolean {
   if (typeof navigator === "undefined") return false;
   if (isIOS()) return false;
   return /macintosh|mac os/i.test(navigator.userAgent);
-}
-
-/** 是否 Linux 桌面端。须先排除 Android（其 UA 也含 Linux）。
- *  用于关闭应用内二进制更新等桌面 Linux 专用分支。 */
-export function isLinux(): boolean {
-  if (typeof navigator === "undefined") return false;
-  if (isAndroid()) return false;
-  return /linux/i.test(navigator.userAgent);
 }
 
 /** 是否移动端（Android / iOS）。App.vue 的键盘/安全区/滚动适配仅移动端挂载，桌面端不运行。 */
