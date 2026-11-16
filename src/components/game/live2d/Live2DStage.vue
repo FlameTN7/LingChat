@@ -17,6 +17,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, provide, readonly, ref, watch } from "vue";
 
+import { isLinux } from "@/utils/platform";
 import { useCharacterEditorApi } from "@/composables/useCharacterEditor";
 const { getLive2dFilePath, getLive2dVariantAssets } = useCharacterEditorApi();
 import type { GameRole } from "@/stores/modules/game/state";
@@ -244,13 +245,16 @@ async function ensureApplication() {
   if (application || !host.value || disposed) return;
   runtime = await loadLive2dRuntime();
   const app = new runtime.pixi.Application();
+  // Linux WebKitGTK：关抗锯齿、分辨率封顶 1、ticker 60，实测 GPU/CPU 明显下降且锯齿可接受
+  const linuxPerf = isLinux();
+  const resolutionCap = linuxPerf ? 1 : props.mode === "pet" ? 1.5 : 2;
   await app.init({
     resizeTo: host.value,
     preference: "webgl",
     backgroundAlpha: 0,
-    antialias: true,
+    antialias: !linuxPerf,
     autoDensity: true,
-    resolution: Math.min(window.devicePixelRatio, props.mode === "pet" ? 1.5 : 2),
+    resolution: Math.min(window.devicePixelRatio, resolutionCap),
   });
   if (disposed || !host.value) {
     app.destroy({ removeView: true, releaseGlobalResources: false }, true);
@@ -259,9 +263,13 @@ async function ensureApplication() {
   app.canvas.className = "absolute inset-0 w-full h-full";
   host.value.appendChild(app.canvas);
   app.ticker.speed = 1.35;
-  // 帧率上限：0/undefined 视为不限帧（保持标准模式/预览原行为）
+  // 帧率上限：0/undefined 视为不限帧（保持标准模式/预览原行为）；Linux 一律封顶 60
   const fpsCap = props.maxFps ?? 0;
-  if (fpsCap > 0) app.ticker.maxFPS = fpsCap;
+  if (linuxPerf) {
+    app.ticker.maxFPS = fpsCap > 0 ? Math.min(fpsCap, 60) : 60;
+  } else if (fpsCap > 0) {
+    app.ticker.maxFPS = fpsCap;
+  }
   app.ticker.add(updateLipSync);
   app.ticker.add(() => touch.update());
   resizeObserver = new ResizeObserver(() => {
@@ -923,8 +931,12 @@ watch(
   () => props.maxFps ?? 0,
   (fps) => {
     if (!application) return;
-    // 0 = 不限帧（PIXI Ticker 语义：maxFPS=0 即关闭上限）
-    application.ticker.maxFPS = fps > 0 ? fps : 0;
+    // 0 = 不限帧（PIXI Ticker 语义：maxFPS=0 即关闭上限）；Linux 仍封顶 60
+    if (isLinux()) {
+      application.ticker.maxFPS = fps > 0 ? Math.min(fps, 60) : 60;
+    } else {
+      application.ticker.maxFPS = fps > 0 ? fps : 0;
+    }
   },
 );
 
