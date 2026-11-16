@@ -32,6 +32,8 @@ const props = defineProps<{
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
 let animationFrameId: number | null = null;
+/** 预渲染径向柔光贴图，替代每帧 ctx.filter blur（WebKitGTK 上极贵） */
+let glowSprite: HTMLCanvasElement | null = null;
 
 const activeMeteors = ref<ActiveMeteor[]>([]);
 let meteorIdCounter = 0;
@@ -160,6 +162,26 @@ function getOpacity(progress: number): number {
   return Math.max(0, Math.min(1, 1 - progress));
 }
 
+/** 生成一次离屏径向柔光，后续 drawImage 复用，视觉接近原 blur 拖尾 */
+function ensureGlowSprite(): HTMLCanvasElement {
+  if (glowSprite) return glowSprite;
+  const size = 64;
+  const off = document.createElement("canvas");
+  off.width = size;
+  off.height = size;
+  const g = off.getContext("2d");
+  if (g) {
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, "rgba(255, 255, 255, 0.95)");
+    grad.addColorStop(0.35, "rgba(220, 240, 255, 0.45)");
+    grad.addColorStop(1, "rgba(180, 220, 255, 0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+  }
+  glowSprite = off;
+  return off;
+}
+
 /**
  * 绘制单个流星
  */
@@ -227,24 +249,19 @@ function drawMeteor(meteor: ActiveMeteor, currentTime: number) {
   }
   ctx.stroke();
 
-  // 绘制拖尾光晕
+  // 拖尾柔光：沿轨迹喷预渲染径向贴图，避免每帧 ctx.filter = blur
+  const glow = ensureGlowSprite();
+  const opacity = getOpacity(progress);
+  const glowSteps = 12;
   ctx.save();
-  ctx.filter = "blur(4px)";
-  ctx.beginPath();
-  ctx.strokeStyle = `rgba(255, 255, 255, ${getOpacity(progress)})`;
-  ctx.lineWidth = METEOR_CONFIG.HEAD_SIZE * 1;
-  ctx.lineCap = "round";
-
-  for (let i = 0; i <= steps; i++) {
-    const t = tailT + (headT - tailT) * (i / steps);
+  for (let i = 0; i <= glowSteps; i++) {
+    const frac = i / glowSteps;
+    const t = tailT + (headT - tailT) * frac;
     const point = getBezierPoint(t, p0, p1, p2);
-    if (i === 0) {
-      ctx.moveTo(point.x, point.y);
-    } else {
-      ctx.lineTo(point.x, point.y);
-    }
+    const size = METEOR_CONFIG.HEAD_SIZE * (3 + 5 * frac);
+    ctx.globalAlpha = opacity * (0.2 + 0.55 * frac);
+    ctx.drawImage(glow, point.x - size / 2, point.y - size / 2, size, size);
   }
-  ctx.stroke();
   ctx.restore();
 }
 
