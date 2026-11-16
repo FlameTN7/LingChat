@@ -171,6 +171,18 @@ fn get_hostname() -> String {
                 return name;
             }
         }
+        // Linux 上 $HOSTNAME 常为空（非交互 shell），回退读系统文件
+        #[cfg(target_os = "linux")]
+        {
+            for path in ["/etc/hostname", "/proc/sys/kernel/hostname"] {
+                if let Ok(raw) = std::fs::read_to_string(path) {
+                    let name = raw.trim();
+                    if !name.is_empty() {
+                        return name.to_string();
+                    }
+                }
+            }
+        }
     }
     // 回退
     "Unknown Device".to_string()
