@@ -65,6 +65,11 @@ export default {
     backtrackFailed: "Rewind failed: {error}",
     emotionTitle: "Emotion: {tag}",
   },
+  linuxTransparentHint: {
+    title: "Desktop pet transparency",
+    message:
+      "The main window is opaque, so the pet cannot show the desktop behind it. Enable “Main Window Transparency” under Settings → Background and restart.",
+  },
   window: {
     title: "Proactive Chat Behavior",
     desc: "Configure the proactive system and schedule policies based on desktop environment awareness",

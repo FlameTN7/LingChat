@@ -955,6 +955,15 @@ export default {
       restartConfirm: "HDR mode takes effect after a restart. Restart the app now?",
       restartFailed: "Restart failed. Please restart the app manually",
     },
+    linuxTransparent: {
+      title: "Main Window Transparency",
+      enable: "Enable main window transparency",
+      restartHint:
+        "Off is smoother on WebKitGTK; turn on for a see-through desktop pet. Restart required.",
+      restartBtn: "Restart Now",
+      restartConfirm: "Main window transparency takes effect after a restart. Restart the app now?",
+      restartFailed: "Restart failed. Please restart the app manually",
+    },
     perf: {
       title: "Performance Check",
       detecting: "Checking hardware performance…",

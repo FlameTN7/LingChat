@@ -406,3 +406,19 @@ pub fn set_hdr_mode(app: AppHandle, enabled: bool) -> Result<(), String> {
     store.save().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// 设置「Linux 主窗口透明」开关。
+///
+/// 持久化到 settings.json 的 `display.linux_transparent_window`，下次启动时由
+/// setup 阶段 `create_linux_main_window` 读取并 `.transparent(值)`。默认 false。
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn set_linux_transparent_window(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let store = crate::config::settings_store(&app).map_err(|e| e.to_string())?;
+    store.set(
+        crate::config::keys::LINUX_TRANSPARENT_WINDOW.to_string(),
+        serde_json::Value::Bool(enabled),
+    );
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}

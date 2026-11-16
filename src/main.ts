@@ -19,6 +19,7 @@ import router from "./router";
 import { installRouteFade } from "./composables/app/useRouteFade";
 import { autoConfigurePerformance } from "./api/services/cpu-perf";
 import { initAudioOutputManager } from "./utils/audioOutputManager";
+import { invoke } from "@tauri-apps/api/core";
 import { isLinux } from "./utils/platform";
 
 // 仅主窗口启动时清除加载过渡标记，避免设置窗口等其他窗口误清除
@@ -39,8 +40,7 @@ const isCastWindow = windowKind === "cast";
 const isBubbleWindow = windowKind === "bubble";
 const isTodoWidgetWindow = windowKind === "todo_widget";
 
-// Linux WebKitGTK：主窗口已关闭 transparent，给非透明需求窗口铺不透明底，
-// 避免默认透明 html/body 在合成路径上额外开销。桌宠气泡 / 桌宠设置窗仍需透明。
+// Linux WebKitGTK：主窗口默认不透明时铺 #0f172a；用户开启「主窗口透明」或气泡/设置窗则保持透明。
 if (isLinux()) {
   const needsTransparentBg =
     isBubbleWindow || currentWindowLabel === "pet_bubble" || currentWindowLabel === "settings";
@@ -48,8 +48,19 @@ if (isLinux()) {
   if (needsTransparentBg) {
     document.documentElement.classList.add("linux-transparent-window");
   } else {
+    // 默认按不透明铺底（与设置默认 false 一致）；再问后端本次进程实际建窗结果并校正
     document.documentElement.style.backgroundColor = "#0f172a";
     document.body.style.backgroundColor = "#0f172a";
+    void invoke<boolean>("is_main_window_transparent")
+      .then((transparent) => {
+        if (!transparent) return;
+        document.documentElement.classList.add("linux-transparent-window");
+        document.documentElement.style.backgroundColor = "";
+        document.body.style.backgroundColor = "";
+      })
+      .catch(() => {
+        // 命令不可用时保持默认不透明底
+      });
   }
 }
 

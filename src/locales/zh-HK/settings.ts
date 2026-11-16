@@ -919,6 +919,14 @@ export default {
       restartConfirm: "HDR 模式設定喺重啟後先會生效，確定即刻重啟應用？",
       restartFailed: "重啟失敗，請手動重啟應用",
     },
+    linuxTransparent: {
+      title: "主視窗透明",
+      enable: "啟用主視窗透明",
+      restartHint: "關閉時 WebKitGTK 更順；桌寵要透出桌面就要開。更改後要重啟應用先生效",
+      restartBtn: "即刻重啟應用",
+      restartConfirm: "主視窗透明設定喺重啟後先會生效，確定即刻重啟應用？",
+      restartFailed: "重啟失敗，請手動重啟應用",
+    },
     perf: {
       title: "性能檢測",
       detecting: "檢測緊硬件性能 …",

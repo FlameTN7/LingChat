@@ -64,6 +64,11 @@ export default {
     backtrackFailed: "巻き戻しに失敗しました：{error}",
     emotionTitle: "感情: {tag}",
   },
+  linuxTransparentHint: {
+    title: "デスクトップペットの透過",
+    message:
+      "メインウィンドウが不透明なため、ペットの背後にデスクトップが表示されません。設定 → 背景で「メインウィンドウの透明化」を有効にして再起動してください。",
+  },
   window: {
     title: "自発会話の動作",
     desc: "デスクトップ環境の認識に基づく自発システムとスケジュールポリシーの設定",

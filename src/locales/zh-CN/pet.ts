@@ -62,6 +62,10 @@ export default {
     backtrackFailed: "回溯失败：{error}",
     emotionTitle: "情感: {tag}",
   },
+  linuxTransparentHint: {
+    title: "桌宠透明提示",
+    message: "当前主窗口不透明，桌宠无法透出桌面。请在设置 → 背景中开启「主窗口透明」并重启应用。",
+  },
   window: {
     title: "主动对话行为",
     desc: "基于桌面环境感知的主动系统与日程策略配置",

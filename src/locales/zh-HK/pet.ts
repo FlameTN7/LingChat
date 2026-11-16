@@ -63,6 +63,10 @@ export default {
     backtrackFailed: "回溯失敗：{error}",
     emotionTitle: "情感: {tag}",
   },
+  linuxTransparentHint: {
+    title: "桌寵透明提示",
+    message: "而家主視窗唔透明，桌寵透唔出桌面。請去設定 → 背景開啟「主視窗透明」再重啟應用。",
+  },
   window: {
     title: "主動對話行為",
     desc: "基於桌面環境感知嘅主動系統同日程策略配置",

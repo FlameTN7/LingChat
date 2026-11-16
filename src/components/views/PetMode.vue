@@ -45,6 +45,7 @@ import { useSettingsStore } from "@/stores/modules/settings";
 import { useUIStore } from "@/stores/modules/ui/ui";
 import { useAutoAdvance } from "@/composables/chat/useAutoAdvance";
 import { useDialogAdvance } from "@/composables/chat/useDialogAdvance";
+import { isLinux } from "@/utils/platform";
 
 import ChatInput from "../pet/ChatInput.vue";
 import DragArea from "../pet/DragArea.vue";
@@ -421,6 +422,24 @@ let hitTestInterval: number | undefined;
 onMounted(async () => {
   document.body.style.backgroundColor = "transparent";
   document.documentElement.style.backgroundColor = "transparent";
+
+  // Linux：主窗口默认不透明时桌宠无法透出桌面——允许进入，但提示去设置开启并重启
+  if (isLinux()) {
+    try {
+      const transparent = await invoke<boolean>("is_main_window_transparent");
+      if (!transparent) {
+        uiStore.showNotification({
+          type: "warning",
+          title: t("pet.linuxTransparentHint.title"),
+          message: t("pet.linuxTransparentHint.message"),
+          duration: 8000,
+          skipTipsCheck: true,
+        });
+      }
+    } catch {
+      // 忽略：命令失败不阻拦进桌宠
+    }
+  }
 
   unlisteners.push(
     await appWindow.listen(PET_BUBBLE_REQUEST, emitMirror),

@@ -134,9 +134,38 @@
         <button
           class="self-start rounded-lg border border-amber-500/30 bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!hdrChanged"
-          @click="restartApp"
+          @click="restartApp('hdr')"
         >
           {{ $t("settings.background.hdr.restartBtn") }}
+        </button>
+      </div>
+    </MenuItem>
+
+    <!-- Linux 主窗口透明：默认关以保 WebKitGTK 性能；开启后需重启，桌宠才可透出桌面 -->
+    <MenuItem
+      v-if="isLinux()"
+      :title="$t('settings.background.linuxTransparent.title')"
+      size="large"
+    >
+      <template #header>
+        <Settings :size="20" />
+      </template>
+      <div class="flex flex-col gap-3">
+        <Toggle
+          :checked="linuxTransparentWindow"
+          @change="settingsStore.setLinuxTransparentWindow($event)"
+        >
+          {{ $t("settings.background.linuxTransparent.enable") }}
+        </Toggle>
+        <p class="text-xs text-yellow-400/70">
+          {{ $t("settings.background.linuxTransparent.restartHint") }}
+        </p>
+        <button
+          class="self-start rounded-lg border border-amber-500/30 bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="!linuxTransparentChanged"
+          @click="restartApp('linuxTransparent')"
+        >
+          {{ $t("settings.background.linuxTransparent.restartBtn") }}
         </button>
       </div>
     </MenuItem>
@@ -336,7 +365,7 @@ import { Button, Toggle, Slider } from "../../base";
 import { useUIStore } from "../../../stores/modules/ui/ui";
 import { useDialogStore } from "../../../stores/modules/ui/dialog";
 import { useSettingsStore } from "../../../stores/modules/settings";
-import { isWindows } from "@/utils/platform";
+import { isLinux, isWindows } from "@/utils/platform";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   Ban,
@@ -428,22 +457,31 @@ const clickAnimationEnabled = computed(() => settingsStore.clickAnimationEnabled
 const cursorEffectEngine = computed(() => settingsStore.cursorEffectEngine);
 const sceneAwarenessEnabled = computed(() => settingsStore.sceneAwarenessEnabled);
 const hdrModeEnabled = computed(() => settingsStore.hdrModeEnabled);
+const linuxTransparentWindow = computed(() => settingsStore.linuxTransparentWindow);
 const currentParticle = computed(() => settingsStore.backgroundEffect);
 const currentWeather = computed(() => settingsStore.weatherEffect);
 
 // 记录进入设置页时的初始值；开关改变后「立即重启」按钮才可用，改回原值则恢复置灰
 const initialHdrMode = ref(settingsStore.hdrModeEnabled);
 const hdrChanged = computed(() => settingsStore.hdrModeEnabled !== initialHdrMode.value);
+const initialLinuxTransparent = ref(settingsStore.linuxTransparentWindow);
+const linuxTransparentChanged = computed(
+  () => settingsStore.linuxTransparentWindow !== initialLinuxTransparent.value,
+);
 
-// 立即重启应用（HDR 模式等设置需重启后生效）
-async function restartApp() {
-  const ok = await dialogStore.confirm(t("settings.background.hdr.restartConfirm"));
+// 立即重启应用（HDR / Linux 主窗口透明等设置需重启后生效）
+async function restartApp(kind: "hdr" | "linuxTransparent") {
+  const prefix =
+    kind === "linuxTransparent"
+      ? "settings.background.linuxTransparent"
+      : "settings.background.hdr";
+  const ok = await dialogStore.confirm(t(`${prefix}.restartConfirm`));
   if (!ok) return;
   try {
     await relaunch();
   } catch (e) {
     console.error("重启失败:", e);
-    dialogStore.alert(t("settings.background.hdr.restartFailed"));
+    dialogStore.alert(t(`${prefix}.restartFailed`));
   }
 }
 const meteorFps = computed({

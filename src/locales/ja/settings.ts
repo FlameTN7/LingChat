@@ -939,6 +939,16 @@ export default {
       restartConfirm: "HDR モードは再起動後に反映されます。今すぐアプリを再起動しますか？",
       restartFailed: "再起動に失敗しました。手動で再起動してください",
     },
+    linuxTransparent: {
+      title: "メインウィンドウの透明化",
+      enable: "メインウィンドウを透明にする",
+      restartHint:
+        "オフの方が WebKitGTK では滑らかです。デスクトップペットを透過させるにはオンにして再起動してください。",
+      restartBtn: "今すぐ再起動",
+      restartConfirm:
+        "メインウィンドウの透明設定は再起動後に反映されます。今すぐアプリを再起動しますか？",
+      restartFailed: "再起動に失敗しました。手動で再起動してください",
+    },
     perf: {
       title: "性能チェック",
       detecting: "ハードウェア性能をチェック中…",

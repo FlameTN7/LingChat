@@ -5,11 +5,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "LingChat",
         "width": 1500,
         "height": 800,
         "transparent": false,
-        "shadow": false
+        "shadow": false,
+        "create": false
       }
     ]
   },

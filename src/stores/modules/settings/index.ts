@@ -2,7 +2,10 @@
  * 统一设置管理 Store
  * 集中管理所有用户偏好设置，自动持久化到 localStorage
  */
-import { setHdrMode } from "@/api/services/config";
+import {
+  setHdrMode,
+  setLinuxTransparentWindow as persistLinuxTransparentWindow,
+} from "@/api/services/config";
 import { setSceneAwareness } from "@/api/services/scene";
 import {
   DEFAULT_SPECTRUM_COLOR_FROM,
@@ -61,6 +64,7 @@ export const DEFAULT_SETTINGS = {
     starsFps: 30, // 星星动画帧率
     sceneAwarenessEnabled: true, // 场景感知开关
     hdrModeEnabled: false, // HDR 模式开关（仅 Windows）
+    linuxTransparentWindow: false, // Linux 主窗口透明（默认关；开后需重启，桌宠可透桌）
     locale: "zh-CN", // 界面显示语言（i18n，'zh-CN' / 'ja'）
     affectionHeartbeatEnabled: true, // 好感度爱心心跳动画开关（关闭后液体爱心静止）
     affectionWaveEnabled: true, // 好感度爱心液体波浪动画开关（关闭后液面为静止平面）
@@ -131,6 +135,7 @@ export interface DisplaySettings {
   starsFps: number;
   sceneAwarenessEnabled: boolean;
   hdrModeEnabled: boolean;
+  linuxTransparentWindow: boolean;
   locale: string;
   affectionHeartbeatEnabled: boolean;
   affectionWaveEnabled: boolean;
@@ -212,6 +217,7 @@ export const useSettingsStore = defineStore("settings", {
     sceneAwarenessEnabled: (state) => state.display.sceneAwarenessEnabled,
     // HDR 模式开关（仅 Windows）
     hdrModeEnabled: (state) => state.display.hdrModeEnabled,
+    linuxTransparentWindow: (state) => state.display.linuxTransparentWindow,
     // 界面显示语言（i18n）
     uiLocale: (state) => state.display.locale,
     // 好感度爱心心跳动画开关（旧持久化数据缺该字段时回退 true）
@@ -396,6 +402,10 @@ export const useSettingsStore = defineStore("settings", {
     setHdrModeEnabled(enabled: boolean) {
       this.display.hdrModeEnabled = enabled;
       setHdrMode(enabled);
+    },
+    setLinuxTransparentWindow(enabled: boolean) {
+      this.display.linuxTransparentWindow = enabled;
+      persistLinuxTransparentWindow(enabled);
     },
 
     // 设置界面显示语言（i18n）
