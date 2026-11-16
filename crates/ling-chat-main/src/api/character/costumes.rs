@@ -213,11 +213,10 @@ pub async fn manage_character_costume(
     let trash = if action == "remove" && source.as_ref().is_some_and(|p| p.exists()) {
         let parent = root.parent().ok_or("角色目录不可用")?.join(".editor-trash");
         std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-        if !parent
-            .canonicalize()
-            .map_err(|e| e.to_string())?
-            .starts_with(root.parent().ok_or("角色目录不可用")?)
-        {
+        let role_root = root.parent().ok_or("角色目录不可用")?;
+        let canon_parent = parent.canonicalize().map_err(|e| e.to_string())?;
+        let canon_role = role_root.canonicalize().map_err(|e| e.to_string())?;
+        if !canon_parent.starts_with(&canon_role) {
             return Err("回收区路径超出角色目录".into());
         }
         Some(

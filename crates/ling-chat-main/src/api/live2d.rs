@@ -134,7 +134,8 @@ fn referenced_path(
         return Err(format!("{label} 引用不是字符串"));
     };
     validate_relative_path(relative, &format!("{label} 引用"))?;
-    let resolved = model_dir.join(relative);
+    let normalized = crate::utils::path::normalize_path_separators(relative);
+    let resolved = model_dir.join(&normalized);
     if !resolved.is_file() {
         return Err(format!("缺少 {label} 文件: {relative}"));
     }

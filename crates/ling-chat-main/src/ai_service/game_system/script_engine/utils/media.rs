@@ -131,10 +131,13 @@ fn resolve_exact(
         return None;
     }
 
+    // 外部剧本常带 Windows 分隔符，统一成 /
+    let file_path = crate::utils::path::normalize_path_separators(file_path);
+
     // Step 1: search current script's Assets directory
     if let Some(sp) = script_path {
         for candidate in media_type.subdir_candidates() {
-            let candidate_path = sp.join("Assets").join(candidate).join(file_path);
+            let candidate_path = sp.join("Assets").join(candidate).join(&file_path);
             if candidate_path.exists() {
                 if let Ok(canon) = candidate_path.canonicalize() {
                     return Some(canon.to_string_lossy().into_owned());
@@ -147,7 +150,7 @@ fn resolve_exact(
     let fallback_path = data_dir
         .join("game_data")
         .join(media_type.fallback_dir())
-        .join(file_path);
+        .join(&file_path);
     if fallback_path.exists() {
         if let Ok(canon) = fallback_path.canonicalize() {
             return Some(canon.to_string_lossy().into_owned());

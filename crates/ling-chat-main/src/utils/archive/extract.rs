@@ -11,7 +11,9 @@ use std::path::Path;
 
 use tokio_util::sync::CancellationToken;
 
-use super::safety::{check_entry_safety, safe_join, sanitize_entry_name};
+use super::safety::{
+    check_entry_safety, is_unix_symlink_mode, safe_join, sanitize_entry_name, unix_permission_bits,
+};
 use super::{ArchiveError, EntryEvent, ExtractSummary, map_sevenz_err};
 
 // ===== 5. 解压 =====
@@ -77,6 +79,14 @@ pub fn extract_zip(
             },
             Err(e) => return Err(e),
         };
+
+        // 拒绝符号链接条目，防止解压逃逸
+        let unix_mode = entry.unix_mode();
+        if is_unix_symlink_mode(unix_mode) {
+            summary.warnings.push(format!("跳过符号链接: {raw_name}"));
+            continue;
+        }
+
         let out_path = safe_join(dest_root, &cleaned)?;
 
         if entry.is_dir() {
@@ -88,6 +98,11 @@ pub fn extract_zip(
         }
 
         let bytes_written = io::copy(&mut entry, &mut File::create(&out_path)?)?;
+        #[cfg(unix)]
+        if let Some(mode) = unix_permission_bits(unix_mode) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode));
+        }
         bytes_done += bytes_written;
         summary.files_extracted += 1;
 
@@ -156,6 +171,12 @@ pub fn extract_sevenz(
         let raw_name = entry.name().to_string();
         let uncompressed = entry.size();
         let compressed = entry.compressed_size;
+        if is_sevenz_symlink_attrs(entry.attributes()) {
+            summary.warnings.push(format!("跳过符号链接: {raw_name}"));
+            processed += 1;
+            entry_index += 1;
+            return Ok(true);
+        }
         let cleaned = match sanitize_entry_name(&raw_name) {
             Ok(c) => c,
             Err(ArchiveError::InvalidName(msg)) => {
@@ -288,4 +309,14 @@ fn write_unstreamed_entry(is_directory: bool, out_path: &Path) -> io::Result<()>
     }
     File::create(out_path)?;
     Ok(())
+}
+
+/// 7z 属性中的符号链接：Windows reparse，或高 16 位 Unix S_IFLNK。
+fn is_sevenz_symlink_attrs(attrs: u32) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return true;
+    }
+    let unix_mode = attrs >> 16;
+    is_unix_symlink_mode(Some(unix_mode))
 }

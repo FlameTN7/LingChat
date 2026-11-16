@@ -123,3 +123,17 @@ pub fn safe_join(dest_root: &Path, cleaned_name: &str) -> Result<PathBuf, Archiv
     }
     Ok(out)
 }
+
+/// Unix 模式位中的符号链接掩码（S_IFLNK）。
+const UNIX_S_IFLNK: u32 = 0o120_000;
+const UNIX_S_IFMT: u32 = 0o170_000;
+
+/// 根据 zip Unix 外部属性判断是否为符号链接条目。
+pub fn is_unix_symlink_mode(mode: Option<u32>) -> bool {
+    mode.is_some_and(|m| m & UNIX_S_IFMT == UNIX_S_IFLNK)
+}
+
+/// 从 zip Unix 模式提取权限位（低 12 位），供解压后 chmod。
+pub fn unix_permission_bits(mode: Option<u32>) -> Option<u32> {
+    mode.map(|m| m & 0o7777)
+}

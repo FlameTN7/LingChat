@@ -217,7 +217,9 @@ pub use extract::{extract_sevenz, extract_zip};
 pub use import_state::{ArchiveImportState, ImportTaskEntry};
 pub use import_state::{ImportingGuard, TaskRemoveGuard};
 pub use resolve::resolve_target;
-pub use safety::{check_entry_safety, safe_join, sanitize_entry_name};
+pub use safety::{
+    check_entry_safety, is_unix_symlink_mode, safe_join, sanitize_entry_name, unix_permission_bits,
+};
 pub use staging::{copy_dir_recursive, list_content_entries, locate_extracted_root, relocate_dir};
 
 pub(super) fn map_sevenz_err(e: sevenz_rust2::Error) -> ArchiveError {

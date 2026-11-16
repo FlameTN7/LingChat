@@ -85,6 +85,8 @@ pub async fn relocate_dir(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// 递归复制目录，作为重命名失败时的回退方案。
+///
+/// 不跟随软链：软链接条目直接跳过，避免跨目录逃逸或环。
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
@@ -94,18 +96,14 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         let from = entry.path();
         let to = dst.join(entry.file_name());
         let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            tracing::warn!("跳过软链接: {}", from.display());
+            continue;
+        }
         if ft.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else if ft.is_file() {
             std::fs::copy(&from, &to)?;
-        } else if ft.is_symlink() {
-            if let Ok(meta) = std::fs::metadata(&from) {
-                if meta.is_dir() {
-                    copy_dir_recursive(&from, &to)?;
-                } else {
-                    std::fs::copy(&from, &to)?;
-                }
-            }
         }
     }
     Ok(())

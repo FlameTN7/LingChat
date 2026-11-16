@@ -1,6 +1,39 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+
+/// 将路径中的 `\` 归一成 `/`（外部资源 / 剧本常带 Windows 分隔符）。
+pub fn normalize_path_separators(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// rename；遇跨分区（EXDEV）时回退为 copy + 删除源。
+pub fn rename_with_fallback(src: &Path, dst: &Path) -> io::Result<()> {
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if is_cross_device(&e) => {
+            fs::copy(src, dst)?;
+            fs::remove_file(src)?;
+            Ok(())
+        },
+        Err(e) => Err(e),
+    }
+}
+
+fn is_cross_device(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::CrossesDevices {
+        return true;
+    }
+    // Unix EXDEV = 18；Windows 跨卷也可能走其他码，靠 ErrorKind 覆盖
+    #[cfg(unix)]
+    {
+        if err.raw_os_error() == Some(18) {
+            return true;
+        }
+    }
+    false
+}
 
 /// 校验并规范化用户提供的单层目录名。
 ///
@@ -106,7 +139,7 @@ pub fn move_directory_files_to(source_dir: &Path, target_dir: &Path) -> Result<u
 
     for source in &files {
         let destination = target_dir.join(source.file_name().expect("file name checked above"));
-        fs::rename(source, &destination).map_err(|e| {
+        rename_with_fallback(source, &destination).map_err(|e| {
             format!(
                 "移动文件失败，源分类已保留且不会删除: {} -> {}: {}",
                 source.display(),

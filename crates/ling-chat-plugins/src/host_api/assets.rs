@@ -19,7 +19,9 @@ pub(crate) fn check_relative_data_path(rel: &str) -> Result<(), String> {
     if rel.is_empty() {
         return Err("路径为空".to_string());
     }
-    let candidate = std::path::Path::new(rel);
+    // 插件传入的 Windows 分隔符先归一，避免被当成路径组件的一部分
+    let normalized = rel.replace('\\', "/");
+    let candidate = std::path::Path::new(&normalized);
     if candidate.is_absolute() {
         return Err("只接受相对 data/ 的路径".to_string());
     }
@@ -61,9 +63,10 @@ fn resolve_data_path_in(
 ) -> Result<std::path::PathBuf, String> {
     let rel = rel.trim();
     check_relative_data_path(rel)?;
+    let normalized = rel.replace('\\', "/");
 
     let real = base
-        .join(rel)
+        .join(&normalized)
         .canonicalize()
         .map_err(|e| io_error_text(rel, &e))?;
     let base_real = base
@@ -74,7 +77,7 @@ fn resolve_data_path_in(
     }
     // 声明的前缀也要 canonicalize 后再比，免得软链接把声明目录指向 data/ 别处
     let declared = allow.iter().any(|prefix| {
-        base.join(prefix.trim())
+        base.join(prefix.trim().replace('\\', "/"))
             .canonicalize()
             .is_ok_and(|p| real.starts_with(&p))
     });
