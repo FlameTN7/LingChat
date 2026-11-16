@@ -200,10 +200,17 @@ pub(super) fn build_service_graph(
     )?);
 
     // 文本嵌入引擎（本地 ONNX）。模型缺失 / ONNX 不可用都只是降级为禁用态。
-    let local_embedding = ai_service::embedding::EmbeddingEngine::load(
-        &data_dir
+    // Linux 系统安装：优先用户 data/third_party，回退只读 resource_dir。
+    let embedding_model_dir = ling_chat_main::data_dir::resolve_third_party(
+        ai_service::embedding::MODEL_DIR_NAME,
+    )
+    .unwrap_or_else(|| {
+        data_dir
             .join("third_party")
-            .join(ai_service::embedding::MODEL_DIR_NAME),
+            .join(ai_service::embedding::MODEL_DIR_NAME)
+    });
+    let local_embedding = ai_service::embedding::EmbeddingEngine::load(
+        &embedding_model_dir,
         ling_chat_main::utils::onnx::onnx_available(),
     );
     // 本地 / 云端路由器：用户配置了云端就换后端，云端连续失败则熔断并告警，
@@ -372,13 +379,14 @@ fn load_emotion_classifier(
 }
 
 fn resolve_emotion_model_dir(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    // 发布模式：data/emotion_model_19emo/
-    let data_path = data_dir.join("third_party").join("emotion_model_19emo");
-    if data_path.exists() {
-        return Some(data_path);
+    if let Some(path) =
+        ling_chat_main::data_dir::resolve_third_party("emotion_model_19emo")
+    {
+        return Some(path);
     }
-
-    None
+    // 回退：开发态或 helper 尚未覆盖时仍看 data_dir
+    let data_path = data_dir.join("third_party").join("emotion_model_19emo");
+    data_path.exists().then_some(data_path)
 }
 
 /// 加载默认角色设定：上次游玩的角色 → 第一个主角色 → 默认空设定
