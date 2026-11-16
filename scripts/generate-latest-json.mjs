@@ -1,6 +1,10 @@
 /**
  * 从本地构建产物生成 latest.json（供手动 GitHub Release 使用）。
  *
+ * 目前只收录 Windows 安装包条目。Linux 已关闭应用内二进制更新，
+ * latest.json 故意不写 linux-* 平台；客户端 Linux 走 GitHub Releases API /
+ * Release 页面引导手动更新。
+ *
  * 用法:
  *   node scripts/generate-latest-json.mjs <version> [notes]
  *

@@ -38,6 +38,14 @@ export function isMacOS(): boolean {
   return /macintosh|mac os/i.test(navigator.userAgent);
 }
 
+/** 是否 Linux 桌面端。须先排除 Android（其 UA 也含 Linux）。
+ *  用于关闭应用内二进制更新等桌面 Linux 专用分支。 */
+export function isLinux(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (isAndroid()) return false;
+  return /linux/i.test(navigator.userAgent);
+}
+
 /** 是否移动端（Android / iOS）。App.vue 的键盘/安全区/滚动适配仅移动端挂载，桌面端不运行。 */
 export function isMobile(): boolean {
   return isAndroid() || isIOS();

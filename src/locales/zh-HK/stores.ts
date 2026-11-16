@@ -35,6 +35,7 @@ export default {
   updater: {
     networkError: "網絡連線失敗，上唔到更新伺服器。唔該檢查下網絡之後再試過。",
     noUpdateAvailable: "冇可用嘅更新",
+    linuxNoInAppUpdate: "Linux 唔支援應用內自動更新，請用套件管理器或者 Release 頁面手動更新。",
   },
   sedentaryReminder: {
     notificationTitle: "LingChat 久坐提提你",

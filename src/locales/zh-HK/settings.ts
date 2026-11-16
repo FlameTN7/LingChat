@@ -1030,12 +1030,16 @@ export default {
       checkButton: "檢查程式更新",
       downloading: "下載緊...",
       updateTo: "更新到 v{version}",
+      openRelease: "去 Release 頁面",
+      linuxManualHint:
+        "Linux 唔支援應用內自動更新，請用套件管理器（AUR/apt）或者喺 Release 下載便攜包更新。",
       syncData: "同步數據",
       statusChecking: "檢查緊更新...",
       statusDownloading: "下載緊更新... {progress}%",
       statusComplete: "更新搞掂，就快重新開過...",
       statusError: "檢查更新失敗",
       statusAvailable: "發現有新版本可以用！",
+      statusAvailableLinux: "發現有新版本，請手動更新。",
     },
     lanSync: {
       title: "局域網數據同步",

@@ -305,9 +305,12 @@
           <div v-if="updateStatusText" :class="updateStatusColor" class="text-sm font-medium">
             {{ updateStatusText }}
           </div>
-          <!-- 下载进度条 -->
+          <p v-if="isLinuxDesktop" class="text-xs text-gray-50/60">
+            {{ $t("settings.text.update.linuxManualHint") }}
+          </p>
+          <!-- 下载进度条（Linux 无应用内安装，不展示） -->
           <div
-            v-if="updatePhase === 'downloading'"
+            v-if="!isLinuxDesktop && updatePhase === 'downloading'"
             class="h-2 w-full overflow-hidden rounded-full bg-slate-700/50"
           >
             <div
@@ -328,7 +331,7 @@
               }}
             </Button>
             <Button
-              v-if="updateAvailable"
+              v-if="updateAvailable && !isLinuxDesktop"
               type="big"
               variant="primary"
               :disabled="updatePhase === 'downloading'"
@@ -339,6 +342,14 @@
                   ? $t("settings.text.update.downloading")
                   : $t("settings.text.update.updateTo", { version: updateLatestVersion })
               }}
+            </Button>
+            <Button
+              v-if="updateAvailable && isLinuxDesktop"
+              type="big"
+              variant="primary"
+              @click="handleOpenReleasePage"
+            >
+              {{ $t("settings.text.update.openRelease") }}
             </Button>
             <Button
               v-if="resourceSyncAvailable && updatePhase !== 'downloading'"
@@ -457,7 +468,7 @@ import { useUpdater } from "@/composables/useUpdater";
 import { eventQueue } from "@/core/events/event-queue";
 import { applyWebInitData } from "@/stores/modules/game/actions";
 import { useLlmProvidersStore } from "@/stores/modules/llm-providers";
-import { isMobile } from "@/utils/platform";
+import { isLinux, isMobile } from "@/utils/platform";
 import type { DialogView } from "@/types/lanSync";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -500,6 +511,7 @@ const { t } = useI18n();
 // 模板里不能用 import.meta（模板表达式按非 module 解析），这里提前取出
 const isDevMode = import.meta.env.DEV;
 const isMobileDevice = isMobile();
+const isLinuxDesktop = isLinux();
 const uiStore = useUIStore();
 const roleStore = useRoleArchiveStore();
 const settingsStore = useSettingsStore();
@@ -629,7 +641,11 @@ const updateStatusText = computed(() => {
   if (updatePhase.value === "complete") return t("settings.text.update.statusComplete");
   if (updatePhase.value === "error")
     return updateErrorMessage.value || t("settings.text.update.statusError");
-  if (updateAvailable.value) return t("settings.text.update.statusAvailable");
+  if (updateAvailable.value) {
+    return isLinuxDesktop
+      ? t("settings.text.update.statusAvailableLinux")
+      : t("settings.text.update.statusAvailable");
+  }
   return "";
 });
 
@@ -658,8 +674,10 @@ async function autoCheckUpdate() {
     const hasUpdate = await updater.checkForUpdates();
     if (hasUpdate) {
       updateLatestVersion.value = updateAppVersion.value;
+    } else if (updatePhase.value === "error") {
+      // checkForUpdates 内部吞异常并置 error；自动检查时清掉，避免启动噪声
+      updater.reset();
     }
-    // 自动检查失败：重置错误状态，不显示任何提示
   } catch {
     updater.reset();
   }
@@ -679,13 +697,22 @@ async function handleCheckUpdate() {
   }
 }
 
-/** 直接安装更新（下载进度+状态全部内联） */
+/** 直接安装更新（下载进度+状态全部内联；Linux 不走此路径） */
 async function handleInstallUpdate() {
   try {
     await updater.installAppUpdate();
     // 成功：phase 变为 'complete'，自动重启
   } catch {
     // 错误通过 phase 内联展示
+  }
+}
+
+/** Linux：打开 GitHub Release，由用户用包管理器或便携包自行更新 */
+async function handleOpenReleasePage() {
+  try {
+    await updater.openReleasePage();
+  } catch (e) {
+    console.error("[Updater] open release page failed:", e);
   }
 }
 

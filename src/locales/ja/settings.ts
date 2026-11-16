@@ -1054,12 +1054,16 @@ export default {
       checkButton: "更新を確認",
       downloading: "ダウンロード中...",
       updateTo: "v{version} に更新",
+      openRelease: "Release ページを開く",
+      linuxManualHint:
+        "Linux ではアプリ内のバイナリ自動更新に対応していません。パッケージマネージャ（AUR/apt）か Release のポータブル版で更新してください。",
       syncData: "データを同期",
       statusChecking: "更新を確認中...",
       statusDownloading: "更新をダウンロード中... {progress}%",
       statusComplete: "更新が完了しました。まもなく再起動します...",
       statusError: "更新の確認に失敗しました",
       statusAvailable: "新しいバージョンが利用可能です！",
+      statusAvailableLinux: "新しいバージョンがあります。手動で更新してください。",
     },
     lanSync: {
       title: "LANデータ同期",

@@ -1,8 +1,16 @@
 import { ref } from "vue";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { i18n } from "@/locales";
+import { isLinux } from "@/utils/platform";
+
+/** GitHub Release 最新页；Linux 无应用内二进制更新，引导用户来此下载或看包管理器说明 */
+export const GITHUB_RELEASES_LATEST_URL = "https://github.com/SlimeBoyOwO/LingChat/releases/latest";
+
+const GITHUB_LATEST_API = "https://api.github.com/repos/SlimeBoyOwO/LingChat/releases/latest";
 
 // ─── 类型定义 ────────────────────────────────────────────────
 
@@ -29,12 +37,7 @@ export interface ResourceSyncResult {
 }
 
 export type UpdatePhase =
-  | "idle"
-  | "checking"
-  | "app-update-available"
-  | "downloading"
-  | "complete"
-  | "error";
+  "idle" | "checking" | "app-update-available" | "downloading" | "complete" | "error";
 
 // ─── 共享状态 ────────────────────────────────────────────────
 
@@ -49,6 +52,52 @@ const resourceSyncInfo = ref<ResourceSyncInfo | null>(null);
 const resourceSyncPhase = ref<"idle" | "review" | "syncing" | "complete" | "error">("idle");
 const resourceSyncError = ref("");
 
+/** 简易 semver 比较：a>b 返回正数。忽略前缀 v，非数字段按 0。 */
+function compareSemver(a: string, b: string): number {
+  const parse = (v: string) =>
+    v
+      .replace(/^v/i, "")
+      .split(/[.+-]/)
+      .map((p) => {
+        const n = parseInt(p, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+  const pa = parse(a);
+  const pb = parse(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return da - db;
+  }
+  return 0;
+}
+
+/** Linux：用 GitHub Releases API 比版本，不走 updater（无 Linux 平台条目，会报错刷日志） */
+async function checkLinuxUpdateViaGithub(): Promise<boolean> {
+  const current = await getVersion();
+  const res = await fetch(GITHUB_LATEST_API, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!res.ok) {
+    throw new Error(`GitHub API ${res.status}`);
+  }
+  const data = (await res.json()) as { tag_name?: string; body?: string };
+  const latest = String(data.tag_name ?? "").replace(/^v/i, "");
+  if (!latest) {
+    phase.value = "idle";
+    return false;
+  }
+  if (compareSemver(latest, current) > 0) {
+    appVersion.value = latest;
+    appReleaseNotes.value = String(data.body ?? "");
+    phase.value = "app-update-available";
+    return true;
+  }
+  phase.value = "idle";
+  return false;
+}
+
 // ─── 导出 composable ─────────────────────────────────────────
 
 export function useUpdater() {
@@ -58,6 +107,11 @@ export function useUpdater() {
     errorMessage.value = "";
 
     try {
+      // Linux 关闭应用内二进制更新：不调用 updater.check，避免无平台条目时的 ERROR 噪声
+      if (isLinux()) {
+        return await checkLinuxUpdateViaGithub();
+      }
+
       const update = await check();
       if (update?.available) {
         appVersion.value = update.version ?? "";
@@ -73,7 +127,7 @@ export function useUpdater() {
       console.error("[Updater] App update check failed:", msg);
       phase.value = "error";
       // 提取有意义的部分（去掉冗长的 URL 和底层错误堆栈）
-      if (msg.includes("error sending request")) {
+      if (msg.includes("error sending request") || msg.includes("Failed to fetch")) {
         errorMessage.value = i18n.global.t("stores.updater.networkError");
       } else {
         errorMessage.value = msg.length > 200 ? msg.slice(0, 200) : msg;
@@ -82,8 +136,14 @@ export function useUpdater() {
     }
   }
 
-  /** 安装 app 更新并重启（带进度追踪） */
+  /** 安装 app 更新并重启（带进度追踪）。Linux 不支持，请走 openReleasePage。 */
   async function installAppUpdate(): Promise<void> {
+    if (isLinux()) {
+      errorMessage.value = i18n.global.t("stores.updater.linuxNoInAppUpdate");
+      phase.value = "error";
+      return;
+    }
+
     try {
       const update = await check();
       if (!update?.available) {
@@ -116,6 +176,11 @@ export function useUpdater() {
       phase.value = "error";
       errorMessage.value = String(e);
     }
+  }
+
+  /** 打开 GitHub Release 最新页（Linux 手动更新入口） */
+  async function openReleasePage(): Promise<void> {
+    await openUrl(GITHUB_RELEASES_LATEST_URL);
   }
 
   /** 重置状态 */
@@ -187,6 +252,7 @@ export function useUpdater() {
     downloadProgress,
     checkForUpdates,
     installAppUpdate,
+    openReleasePage,
     reset,
     // 资源同步
     resourceSyncInfo,

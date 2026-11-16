@@ -39,6 +39,8 @@ export default {
     networkError:
       "Network connection failed — can't reach the update server. Please check your network and try again.",
     noUpdateAvailable: "No updates available",
+    linuxNoInAppUpdate:
+      "In-app binary updates are not supported on Linux. Please update via your package manager or the Release page.",
   },
   sedentaryReminder: {
     notificationTitle: "LingChat Sedentary Reminder",

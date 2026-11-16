@@ -1070,12 +1070,16 @@ export default {
       checkButton: "Check for Updates",
       downloading: "Downloading...",
       updateTo: "Update to v{version}",
+      openRelease: "Open Release Page",
+      linuxManualHint:
+        "In-app binary updates are not supported on Linux. Please update via your package manager (AUR/apt) or download the portable package from the Release page.",
       syncData: "Sync Data",
       statusChecking: "Checking for updates...",
       statusDownloading: "Downloading update... {progress}%",
       statusComplete: "Update complete, restarting soon...",
       statusError: "Failed to check for updates",
       statusAvailable: "New version available!",
+      statusAvailableLinux: "A new version is available — please update manually.",
     },
     lanSync: {
       title: "LAN Data Sync",

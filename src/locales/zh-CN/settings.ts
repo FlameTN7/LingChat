@@ -1323,12 +1323,16 @@ export default {
       checkButton: "检查程序更新",
       downloading: "下载中...",
       updateTo: "更新到 v{version}",
+      openRelease: "前往 Release 页面",
+      linuxManualHint:
+        "Linux 不支持应用内自动更新，请通过包管理器（AUR/apt）或从 Release 下载便携包更新。",
       syncData: "同步数据",
       statusChecking: "正在检查更新...",
       statusDownloading: "正在下载更新... {progress}%",
       statusComplete: "更新完成，即将重启...",
       statusError: "检查更新失败",
       statusAvailable: "发现新版本可用！",
+      statusAvailableLinux: "发现新版本，请手动更新。",
     },
     lanSync: {
       title: "局域网数据同步",

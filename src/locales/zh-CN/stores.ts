@@ -34,6 +34,7 @@ export default {
   updater: {
     networkError: "网络连接失败，无法访问更新服务器。请检查网络后重试。",
     noUpdateAvailable: "没有可用的更新",
+    linuxNoInAppUpdate: "Linux 不支持应用内自动更新，请通过包管理器或 Release 页面手动更新。",
   },
   sedentaryReminder: {
     notificationTitle: "LingChat 久坐提醒",

@@ -42,6 +42,8 @@ export default {
     networkError:
       "ネットワーク接続に失敗しました。更新サーバーにアクセスできません。ネットワークを確認してからもう一度お試しください。",
     noUpdateAvailable: "利用可能な更新はありません",
+    linuxNoInAppUpdate:
+      "Linux ではアプリ内のバイナリ自動更新に対応していません。パッケージマネージャか Release ページから手動で更新してください。",
   },
   sedentaryReminder: {
     notificationTitle: "LingChat 久坐リマインダー",
