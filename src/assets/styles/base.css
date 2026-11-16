@@ -136,6 +136,21 @@ textarea {
     inset 0 1px 1px rgba(255, 255, 255, 0.1);
 }
 
+/* Linux WebKitGTK：backdrop-filter 全屏合成代价极高，统一关掉并靠半透明底保可读性。
+   html.linux 由 main.ts 挂上；不改动其他平台。 */
+html.linux .glass-effect,
+html.linux [class*="backdrop-blur"],
+html.linux .blur-overlay {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html.linux .glass-effect {
+  background: rgba(15, 23, 42, 0.88);
+}
+html.linux .blur-overlay {
+  background: rgba(0, 0, 0, 0.82);
+}
+
 /* 玻璃态输入框。与 .glass-effect 同类：一处定义，避免每个用到表单的组件
    各抄一份。剧本编辑器的三个组件原先是逐字相同的三份。 */
 .glass-input {

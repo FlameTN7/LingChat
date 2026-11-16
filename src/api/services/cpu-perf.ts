@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { i18n } from "@/locales";
+import { isLinux } from "@/utils/platform";
 
 /** 性能等级枚举（与 Rust 端保持一致） */
 export type PerfTier = "Internet" | "Low" | "Medium" | "High";
@@ -202,7 +203,16 @@ export async function autoConfigurePerformance(): Promise<void> {
     const gpuTier = await resolveGpuTier();
 
     // 综合等级取 CPU / GPU 中较低者
-    const tier = getCombinedTier(cpu.tier, gpuTier);
+    let tier = getCombinedTier(cpu.tier, gpuTier);
+    const linux = isLinux();
+    // Linux WebKitGTK：wgpu 可能认出高端独显，但合成/Canvas 路径远弱于标称算力；
+    // 自动档位封顶 Medium，并关掉流星/鼠标拖尾等最贵特效（用户仍可在设置手动开启）。
+    if (linux && getTierRank(tier) > getTierRank("Medium")) {
+      console.log(
+        `[Perf] Linux：综合档位 ${tier} 自动上限压到 Medium（WebKitGTK 合成瓶颈，设置里可手动开高）`,
+      );
+      tier = "Medium";
+    }
     const fps = getSuggestedMaxFps(tier);
 
     // 延迟导入避免循环依赖，等 pinia store 就绪
@@ -216,9 +226,10 @@ export async function autoConfigurePerformance(): Promise<void> {
       settingsStore.setStarsFps(Math.min(fps, 60));
     }
 
-    // 低性能设备自动关闭高开销特效
-    if (tier === "Internet" || tier === "Low") {
-      const effects = getRecommendedEffects(tier);
+    // 低性能设备，或 Linux（WebKitGTK）首次启动：按推荐关掉高开销特效
+    const shouldApplyEffects = tier === "Internet" || tier === "Low" || linux;
+    if (shouldApplyEffects) {
+      const effects = linux ? getLinuxDefaultEffects(tier) : getRecommendedEffects(tier);
       if (
         settingsStore.display.mainMenuStarsEnabled === DEFAULT_SETTINGS.display.mainMenuStarsEnabled
       ) {
@@ -280,4 +291,14 @@ export function getRecommendedEffects(tier: PerfTier): RecommendedEffects {
         clickAnimationEnabled: true,
       };
   }
+}
+
+/** Linux 默认特效：在既有档位推荐上关掉流星与 ba-click-fx 拖尾（GPU 最贵） */
+export function getLinuxDefaultEffects(tier: PerfTier): RecommendedEffects {
+  const base = getRecommendedEffects(tier === "High" ? "Medium" : tier);
+  return {
+    ...base,
+    mainMenuMeteorsEnabled: false,
+    globalMouseTrailEnabled: false,
+  };
 }

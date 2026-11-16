@@ -1,6 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PerfTier } from "./cpu-perf";
 import { getTierLabel, getPerfTierColor, getSuggestedMaxFps } from "./cpu-perf";
+import { isLinux } from "@/utils/platform";
+
+/** WebKitGTK 2.54 指纹保护会把 UNMASKED_RENDERER_WEBGL 伪装成 Apple GPU / Apple Inc. */
+function isWebKitGtkAppleSpoof(renderer: string): boolean {
+  const lower = renderer.toLowerCase();
+  return (
+    lower.includes("apple gpu") ||
+    lower.includes("apple inc") ||
+    (/apple/i.test(renderer) && !/angle/i.test(renderer) && !/metal/i.test(renderer))
+  );
+}
 
 /** GPU 信息接口 */
 export interface GpuInfo {
@@ -115,6 +126,14 @@ export async function getActiveGpu(): Promise<GpuInfo> {
       is_applicable: false,
       message: "无法读取 WebGL 渲染器",
     };
+  }
+  // Linux WebKitGTK：指纹伪装名无法定级；明确打日志，避免调用方误把空名当「无 GPU」
+  // 后盲目采信 wgpu 枚举的高端独显去开全特效（合成瓶颈在 WebKit，不在 Vulkan 算力）。
+  if (isLinux() && isWebKitGtkAppleSpoof(renderer)) {
+    console.warn(
+      `[GPU] WebKitGTK 指纹保护伪装渲染器为 "${renderer}"，无法据此定级；` +
+        `将回退硬件枚举，且 Linux 自动画质会封顶中档（可在设置手动开高）`,
+    );
   }
   return await invoke<GpuInfo>("grade_active_gpu", { renderer });
 }
