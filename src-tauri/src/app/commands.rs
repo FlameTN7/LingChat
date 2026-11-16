@@ -136,6 +136,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::chat::rollback_conversation,
         api::chat::generate_line_voice,
         api::chat::feed_image,
+        api::chat::read_dropped_text_file,
         api::chat::feed_text,
         api::screenshot::start_screenshot,
         api::screenshot::get_overlay_data,

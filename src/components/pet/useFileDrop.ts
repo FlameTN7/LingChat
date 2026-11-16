@@ -4,7 +4,6 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIStore } from "@/stores/modules/ui/ui";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
@@ -12,10 +11,10 @@ function isImageFile(path: string): boolean {
   return IMAGE_EXTS.has(path.slice(path.lastIndexOf(".")).toLowerCase());
 }
 
+/** 经后端读外部拖入文本（绕过 plugin-fs capabilities scope）。 */
 async function readAsText(path: string): Promise<string | null> {
   try {
-    const bytes = await readFile(path);
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return await invoke<string>("read_dropped_text_file", { path });
   } catch {
     return null;
   }

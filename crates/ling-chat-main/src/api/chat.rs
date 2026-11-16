@@ -824,6 +824,25 @@ pub async fn feed_image(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 读取桌宠拖入的外部文本文件。
+///
+/// 前端 plugin-fs 受 capabilities scope 限制，无法读任意拖入路径；
+/// 应用命令无 ACL 门控，由此处直接读盘并做大小/编码校验。
+#[tauri::command]
+pub fn read_dropped_text_file(path: String) -> Result<String, String> {
+    const MAX_BYTES: u64 = 512 * 1024;
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("文件不存在".into());
+    }
+    let meta = std::fs::metadata(p).map_err(|e| format!("无法读取文件信息: {e}"))?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!("文件过大（上限 {} KB）", MAX_BYTES / 1024));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("读取失败: {e}"))?;
+    String::from_utf8(bytes).map_err(|_| "不是有效的 UTF-8 文本".to_string())
+}
+
 #[tauri::command]
 pub async fn feed_text(app: AppHandle, text: String) -> Result<(), String> {
     let state = app.state::<AppState>();
