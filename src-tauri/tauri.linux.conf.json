@@ -8,11 +8,6 @@
         "files": {
           "/usr/lib/LingChat/lib": "linux-libs"
         }
-      },
-      "appimage": {
-        "files": {
-          "/usr/lib/LingChat/lib": "linux-libs"
-        }
       }
     }
   }

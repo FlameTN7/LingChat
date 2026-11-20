@@ -1337,6 +1337,9 @@ export default {
       statusComplete: "更新完成，即将重启...",
       statusError: "检查更新失败",
       statusAvailable: "发现新版本可用！",
+      downloadRelease: "前往下载 v{version}",
+      linuxHint:
+        "Linux 端不支持应用内覆盖更新，请通过包管理器（如 AUR / apt）或前往 Release 页面更新。",
     },
     lanSync: {
       title: "局域网数据同步",

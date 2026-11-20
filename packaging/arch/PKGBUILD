@@ -1,47 +1,88 @@
-# Maintainer: lzx <lzx@localhost>
-pkgname=lingchat
+# Maintainer: FlameTN7 <FlameTN7@users.noreply.github.com>
+pkgname=lingchat-bin
 # 需与 src-tauri/tauri.conf.json 中的 version 保持一致
 pkgver=0.5.2
 pkgrel=1
 pkgdesc='AI Galgame Engine'
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url='https://github.com/SlimeBoyOwO/LingChat'
 license=('AGPL-3.0-only')
-depends=('gtk3' 'webkit2gtk-4.1' 'hicolor-icon-theme')
-makedepends=('nodejs' 'pnpm' 'rust' 'pkgconf' 'clang' 'cmake' 'libarchive')
+provides=('lingchat')
+conflicts=('lingchat')
+depends=(
+  'gtk3'
+  'webkit2gtk-4.1'
+  'libayatana-appindicator'
+  'openssl'
+  'alsa-lib'
+  'hicolor-icon-theme'
+)
+optdepends=(
+  'pipewire: low-latency audio and screen cast support'
+  'vulkan-icd-loader: Vulkan GPU tier detection and WebGPU acceleration'
+  'fontconfig: system font enumeration'
+  'xdg-desktop-portal: file dialogs and desktop integration'
+)
 options=('!strip' '!debug')
 
-# 直接在源码工作区里构建，复用已有的 node_modules 与 target 缓存。
-# 用法：在本文件所在目录执行 makepkg -si
-_src="$startdir/../.."
-_deb="target/release/bundle/deb/LingChat_${pkgver}_amd64.deb"
-
-build() {
-  cd "$_src"
-
-  # makepkg 默认注入的 -flto=auto 会让 ring 预编译汇编/GCC LTO 目标文件
-  # 在 rust-lld 下解析失败（undefined symbol: ring_core_0_17_14__*）。
-  # RUSTFLAGS 里的 -C opt-level=3 也会覆盖项目自身的 opt-level=z。
-  # Rust/C 依赖的优化级别由 Cargo profile 决定，这里清空 makepkg 的注入。
-  unset CFLAGS CXXFLAGS LDFLAGS LTOFLAGS RUSTFLAGS
-
-  rm -f "$_deb"
-  pnpm install --frozen-lockfile
-  # 关闭 updater 签名产物，避免本地无 TAURI_SIGNING_PRIVATE_KEY 时构建失败
-  pnpm tauri build --bundles deb \
-    --config '{"bundle":{"createUpdaterArtifacts":false}}'
-}
+source_x86_64=("LingChat-${pkgver}-linux-x86_64.tar.gz::${url}/releases/download/v${pkgver}/LingChat-${pkgver}-linux-x86_64.tar.gz")
+source_aarch64=("LingChat-${pkgver}-linux-aarch64.tar.gz::${url}/releases/download/v${pkgver}/LingChat-${pkgver}-linux-aarch64.tar.gz")
+# 发布正式 Release 后替换为对应 .tar.gz.sha256 校验值
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
-  cd "$_src"
-  [[ -f "$_deb" ]] || {
-    echo "error: 未生成 $_deb" >&2
+  local _src="$srcdir/LingChat-${pkgver}-linux-${CARCH}"
+  [[ -d "$_src" ]] || {
+    echo "error: 未找到解压目录 $_src" >&2
     return 1
   }
 
-  install -d "$srcdir/deb"
-  bsdtar -xf "$_deb" -C "$srcdir/deb"
+  install -Dm755 "$_src/ling_chat" "$pkgdir/usr/lib/LingChat/ling_chat"
+  if [[ -f "$_src/libwebgpu_dawn.so" ]]; then
+    install -Dm755 "$_src/libwebgpu_dawn.so" "$pkgdir/usr/lib/LingChat/libwebgpu_dawn.so"
+  fi
 
-  install -d "$pkgdir"
-  tar -xzf "$srcdir/deb/data.tar.gz" -C "$pkgdir"
+  # 安装只读基准资源与第三方模型（不安装 .portable 标记，确保运行时走 XDG 用户目录）
+  if [[ -d "$_src/data/.official" ]]; then
+    install -d "$pkgdir/usr/lib/LingChat/data/.official"
+    cp -a "$_src/data/.official/." "$pkgdir/usr/lib/LingChat/data/.official/"
+  fi
+  if [[ -d "$_src/data/third_party" ]]; then
+    install -d "$pkgdir/usr/lib/LingChat/data/third_party"
+    cp -a "$_src/data/third_party/." "$pkgdir/usr/lib/LingChat/data/third_party/"
+  fi
+  if [[ -d "$pkgdir/usr/lib/LingChat/data" ]]; then
+    find "$pkgdir/usr/lib/LingChat/data" -type d -exec chmod 755 {} +
+    find "$pkgdir/usr/lib/LingChat/data" -type f -exec chmod 644 {} +
+  fi
+
+  # 启动 wrapper
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/lingchat" << 'EOF'
+#!/bin/sh
+exec /usr/lib/LingChat/ling_chat "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/lingchat"
+
+  # 桌面快捷方式
+  install -d "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/lingchat.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=LingChat
+Comment=AI Galgame Engine
+Exec=lingchat %U
+Icon=lingchat
+Terminal=false
+Categories=Game;Chat;Utility;
+StartupWMClass=ling_chat
+EOF
+  chmod 644 "$pkgdir/usr/share/applications/lingchat.desktop"
+
+  # 多尺寸图标
+  [[ -f "$_src/icons/32x32.png" ]] && install -Dm644 "$_src/icons/32x32.png" "$pkgdir/usr/share/icons/hicolor/32x32/apps/lingchat.png"
+  [[ -f "$_src/icons/128x128.png" ]] && install -Dm644 "$_src/icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/lingchat.png"
+  [[ -f "$_src/icons/128x128@2x.png" ]] && install -Dm644 "$_src/icons/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/lingchat.png"
+  [[ -f "$_src/icons/icon.png" ]] && install -Dm644 "$_src/icons/icon.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/lingchat.png"
 }

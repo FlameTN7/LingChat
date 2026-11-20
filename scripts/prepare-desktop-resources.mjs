@@ -61,9 +61,24 @@ try {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-} catch (err) {
-  console.error("❌ 无法运行 git ls-files");
-  process.exit(1);
+} catch {
+  // 脱离 .git 的源码归档构建时，从磁盘扫描 data/game_data（排除运行期用户文件）
+  console.warn("⚠ 未处于 git 仓库中，回退到扫描 data/game_data 目录");
+  const walkGameData = (dir, prefix) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry);
+      const rel = `${prefix}/${entry}`;
+      if (statSync(fullPath).isDirectory()) {
+        if (["screenshots", "voice", ".trash"].includes(entry)) continue;
+        walkGameData(fullPath, rel);
+      } else {
+        if (entry.endsWith(".db") || entry.endsWith(".backup.db")) continue;
+        gitFiles.push(rel);
+      }
+    }
+  };
+  walkGameData(join(projectRoot, "data", "game_data"), "data/game_data");
 }
 
 console.log(`📋 git 跟踪了 ${gitFiles.length} 个文件（data/ 下）`);
