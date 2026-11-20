@@ -932,6 +932,7 @@ export default {
         legacy: "クラシックエフェクト",
       },
       sceneAwareness: "シーン感知を有効化（シーン切替時にナレーションを発生）",
+      backdropBlur: "すりガラス効果を有効化（無効化すると Linux の GPU 負荷を大幅に軽減）",
       meteorFps: "流星フレームレート (FPS)",
       starsFps: "星フレームレート (FPS)",
     },
@@ -941,6 +942,15 @@ export default {
       restartHint: "変更はアプリの再起動後に反映されます",
       restartBtn: "今すぐ再起動",
       restartConfirm: "HDR モードは再起動後に反映されます。今すぐアプリを再起動しますか？",
+      restartFailed: "再起動に失敗しました。手動で再起動してください",
+    },
+    linuxTransparent: {
+      title: "ウィンドウ透過（Linux）",
+      enable: "メインウィンドウの透過を有効化",
+      restartHint:
+        "既定ではフレームレート向上のため無効です。デスクトップペットを透過表示したい場合に有効化し、再起動してください",
+      restartBtn: "今すぐ再起動",
+      restartConfirm: "メインウィンドウの透過設定は再起動後に反映されます。今すぐ再起動しますか？",
       restartFailed: "再起動に失敗しました。手動で再起動してください",
     },
     perf: {

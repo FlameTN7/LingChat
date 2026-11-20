@@ -93,4 +93,6 @@ export default {
     reminderHours: "提前 {count} 小时",
     reminderDays: "提前 {count} 天",
   },
+  linuxTransparentHint:
+    "当前 Linux 主窗口未启用透明，请在「设置 → 背景 → 窗口透明」开启并重启后再切换桌宠。",
 };

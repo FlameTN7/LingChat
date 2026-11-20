@@ -578,6 +578,25 @@ fn parse_renderer(renderer: &str) -> (u32, String) {
 /// 复用与硬件枚举一致的 `grade()` 逻辑定级。仅展示用，不参与 `detect_gpu()` 的「取最高」。
 #[tauri::command]
 pub fn grade_active_gpu(renderer: String) -> Result<GpuInfo, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let trimmed = renderer.trim();
+        if trimmed.eq_ignore_ascii_case("apple gpu")
+            || trimmed.to_ascii_lowercase().contains("apple gpu")
+        {
+            tracing::info!(
+                "[GPU] WebKitGTK masked UNMASKED_RENDERER_WEBGL as '{}' ; active GPU detection is unavailable on WebKitGTK >= 2.54, falling back to wgpu hardware enum",
+                trimmed
+            );
+            return Ok(GpuInfo {
+                name: String::new(),
+                tier: PerfTier::Low,
+                is_applicable: false,
+                message: None,
+            });
+        }
+    }
+
     let (vendor_id, name) = parse_renderer(&renderer);
     let name = name.trim().to_string();
     if vendor_id == 0 || name.is_empty() {
@@ -595,4 +614,18 @@ pub fn grade_active_gpu(renderer: String) -> Result<GpuInfo, String> {
         is_applicable: true,
         message: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_webkitgtk_masked_apple_gpu_falls_back_gracefully() {
+        let info = grade_active_gpu("Apple GPU".to_string()).expect("grade_active_gpu");
+        assert!(!info.is_applicable);
+        assert!(info.name.is_empty());
+        assert!(info.message.is_none());
+    }
 }

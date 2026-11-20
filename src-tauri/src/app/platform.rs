@@ -1,8 +1,26 @@
 //! 平台适配。
 //!
-//! 目前只处理 Windows 上的 WebView2 颜色配置文件：它必须在 WebView2 环境创建
-//! （`Builder::build()`）**之前**设置，因此无法走 Tauri 的设置体系，只能在此处
-//! 直接读 store 文件并写进程环境变量。本模块原先位于 crate 根（`lib.rs`）。
+//! - Windows：WebView2 颜色配置文件必须在 WebView2 环境创建（`Builder::build()`）
+//!   **之前**设置，因此无法走 Tauri 的设置体系，只能直接读 store 文件并写进程环境变量。
+//! - Linux：主窗口 `create: false`，在 setup 最早阶段按 settings.json 的
+//!   `display.linux_transparent_window` 决定 `.transparent(...)` 后手动建窗
+//!   （默认 false，保留 WebKitGTK 性能收益；开启后需重启，桌宠才可透出桌面）。
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 本次进程主窗口实际是否透明（Linux 建窗时写入；其它平台默认 true）。
+static MAIN_WINDOW_TRANSPARENT: AtomicBool = AtomicBool::new(true);
+
+/// 查询本次进程主窗口是否透明（前端铺底 / 桌宠提示用）。
+#[tauri::command]
+pub fn is_main_window_transparent() -> bool {
+    MAIN_WINDOW_TRANSPARENT.load(Ordering::Relaxed)
+}
+
+#[cfg(target_os = "linux")]
+fn set_main_window_transparent(value: bool) {
+    MAIN_WINDOW_TRANSPARENT.store(value, Ordering::Relaxed);
+}
 
 /// 读取 settings.json 中的「HDR 模式」开关（仅 Windows）。
 ///
@@ -55,3 +73,64 @@ pub fn apply_webview2_color_profile(identifier: &str) {
 /// 非 Windows 平台无颜色配置文件设置需求。
 #[cfg(not(target_os = "windows"))]
 pub fn apply_webview2_color_profile(_identifier: &str) {}
+
+/// 读取 settings.json 中的 Linux 主窗口透明开关（默认 false）。
+/// 优先通过 `settings_store` 读取（与 `set_linux_transparent_window` 写入路径完全一致），
+/// 并兜底解析 `app_config_dir()/settings.json` 与 `app_data_dir()/settings.json`。
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn get_linux_transparent_window(app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
+
+    if let Ok(store) = ling_chat_main::config::settings_store(&app) {
+        if let Some(val) = store
+            .get(ling_chat_main::config::keys::LINUX_TRANSPARENT_WINDOW)
+            .and_then(|v| v.as_bool())
+        {
+            return val;
+        }
+    }
+
+    for dir in [
+        app.path().app_data_dir().ok(),
+        app.path().app_config_dir().ok(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let path = dir.join(ling_chat_main::config::STORE_FILE);
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if ling_chat_main::config::parse_linux_transparent_window(&content) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Linux：按配置与设置项手动创建主窗口。必须在任何 `get_webview_window("main")`
+/// 之前调用（background 点击穿透、托盘等依赖 main）。
+#[cfg(target_os = "linux")]
+pub fn create_linux_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::WebviewWindowBuilder;
+
+    let transparent = get_linux_transparent_window(app.handle().clone());
+    set_main_window_transparent(transparent);
+
+    let Some(config) = app.config().app.windows.first() else {
+        return Err("Linux：tauri.linux.conf.json 缺少主窗口配置".into());
+    };
+
+    WebviewWindowBuilder::from_config(app.handle(), config)?
+        .transparent(transparent)
+        .build()?;
+
+    tracing::info!(transparent, "[Linux] 主窗口已创建");
+    Ok(())
+}
+
+/// 非 Linux：主窗口由配置自动创建，运行时标记保持默认 true。
+#[cfg(not(target_os = "linux"))]
+pub fn create_linux_main_window(_app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}

@@ -181,6 +181,10 @@ pub const LOCAL_TTS_DEVICE: &str = "features.local_tts_device";
 #[cfg(target_os = "windows")]
 pub const HDR_MODE_ENABLED: &str = "display.hdr_mode_enabled";
 
+// ========== 显示（主窗口透明，仅 Linux） ==========
+/// Linux 主窗口是否透明。默认 false（WebKitGTK 合成更省）；开启后需重启，桌宠才可透出桌面。
+pub const LINUX_TRANSPARENT_WINDOW: &str = "display.linux_transparent_window";
+
 // ========== 界面与显示 ==========
 /// 是否关闭首次启动的开屏动画（LoadingTransition 猫爪加载动画）。
 pub const DISABLE_SPLASH_ANIMATION: &str = "display.disable_splash_animation";

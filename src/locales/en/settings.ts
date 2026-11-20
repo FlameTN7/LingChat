@@ -948,6 +948,8 @@ export default {
         legacy: "Classic FX",
       },
       sceneAwareness: "Enable scene awareness (triggers narration when switching scenes)",
+      backdropBlur:
+        "Enable backdrop blur (disabling significantly reduces Linux compositor GPU load)",
       meteorFps: "Meteor FPS",
       starsFps: "Star FPS",
     },
@@ -957,6 +959,15 @@ export default {
       restartHint: "Restart the app for changes to take effect",
       restartBtn: "Restart Now",
       restartConfirm: "HDR mode takes effect after a restart. Restart the app now?",
+      restartFailed: "Restart failed. Please restart the app manually",
+    },
+    linuxTransparent: {
+      title: "Window Transparency (Linux)",
+      enable: "Enable transparent main window",
+      restartHint:
+        "Disabled by default for better frame pacing; enable and restart if you want Desktop Pet to be transparent over your desktop",
+      restartBtn: "Restart Now",
+      restartConfirm: "Window transparency takes effect after a restart. Restart the app now?",
       restartFailed: "Restart failed. Please restart the app manually",
     },
     perf: {
