@@ -1,8 +1,15 @@
 import { ref } from "vue";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import gt from "semver/functions/gt";
 import { i18n } from "@/locales";
+import { isLinux } from "@/utils/platform";
+
+const LINUX_RELEASE_API = "https://api.github.com/repos/SlimeBoyOwO/LingChat/releases/latest";
+const LINUX_RELEASES_URL = "https://github.com/SlimeBoyOwO/LingChat/releases/latest";
 
 // ─── 类型定义 ────────────────────────────────────────────────
 
@@ -29,12 +36,7 @@ export interface ResourceSyncResult {
 }
 
 export type UpdatePhase =
-  | "idle"
-  | "checking"
-  | "app-update-available"
-  | "downloading"
-  | "complete"
-  | "error";
+  "idle" | "checking" | "app-update-available" | "downloading" | "complete" | "error";
 
 // ─── 共享状态 ────────────────────────────────────────────────
 
@@ -58,6 +60,23 @@ export function useUpdater() {
     errorMessage.value = "";
 
     try {
+      if (isLinux()) {
+        const resp = await fetch(LINUX_RELEASE_API);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const release = (await resp.json()) as { tag_name: string; body: string | null };
+        const version = release.tag_name.replace(/^v/i, "");
+        if (gt(version, await getVersion())) {
+          appVersion.value = version;
+          appReleaseNotes.value = release.body ?? "";
+          phase.value = "app-update-available";
+          return true;
+        }
+        phase.value = "idle";
+        return false;
+      }
+
       const update = await check();
       if (update?.available) {
         appVersion.value = update.version ?? "";
@@ -73,7 +92,7 @@ export function useUpdater() {
       console.error("[Updater] App update check failed:", msg);
       phase.value = "error";
       // 提取有意义的部分（去掉冗长的 URL 和底层错误堆栈）
-      if (msg.includes("error sending request")) {
+      if (msg.includes("error sending request") || msg.includes("Failed to fetch")) {
         errorMessage.value = i18n.global.t("stores.updater.networkError");
       } else {
         errorMessage.value = msg.length > 200 ? msg.slice(0, 200) : msg;
@@ -82,8 +101,19 @@ export function useUpdater() {
     }
   }
 
-  /** 安装 app 更新并重启（带进度追踪） */
+  /** 安装 app 更新并重启（Linux 改为打开 Release 页面，避免覆盖系统目录或静默失败） */
   async function installAppUpdate(): Promise<void> {
+    if (isLinux()) {
+      try {
+        await openUrl(LINUX_RELEASES_URL);
+      } catch (e) {
+        console.error("[Updater] Failed to open release page on Linux:", e);
+        phase.value = "error";
+        errorMessage.value = String(e);
+      }
+      return;
+    }
+
     try {
       const update = await check();
       if (!update?.available) {

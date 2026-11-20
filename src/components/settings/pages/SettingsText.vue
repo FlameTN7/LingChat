@@ -305,6 +305,10 @@
           <div v-if="updateStatusText" :class="updateStatusColor" class="text-sm font-medium">
             {{ updateStatusText }}
           </div>
+          <!-- Linux 提示：禁止应用内覆盖安装，指引包管理器或 Release 手动更新 -->
+          <div v-if="isLinux()" class="text-xs text-slate-300/85">
+            {{ $t("settings.text.update.linuxHint") }}
+          </div>
           <!-- 下载进度条 -->
           <div
             v-if="updatePhase === 'downloading'"
@@ -337,7 +341,9 @@
               {{
                 updatePhase === "downloading"
                   ? $t("settings.text.update.downloading")
-                  : $t("settings.text.update.updateTo", { version: updateLatestVersion })
+                  : isLinux()
+                    ? $t("settings.text.update.downloadRelease", { version: updateLatestVersion })
+                    : $t("settings.text.update.updateTo", { version: updateLatestVersion })
               }}
             </Button>
             <Button
@@ -457,7 +463,7 @@ import { useUpdater } from "@/composables/useUpdater";
 import { eventQueue } from "@/core/events/event-queue";
 import { applyWebInitData } from "@/stores/modules/game/actions";
 import { useLlmProvidersStore } from "@/stores/modules/llm-providers";
-import { isMobile } from "@/utils/platform";
+import { isLinux, isMobile } from "@/utils/platform";
 import type { DialogView } from "@/types/lanSync";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
