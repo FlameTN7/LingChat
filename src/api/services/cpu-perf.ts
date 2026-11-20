@@ -209,11 +209,12 @@ export async function autoConfigurePerformance(): Promise<void> {
     const { useSettingsStore, DEFAULT_SETTINGS } = await import("../../stores/modules/settings");
     const settingsStore = useSettingsStore();
 
+    const targetFps = Math.min(fps, 60);
     if (settingsStore.display.meteorFps === DEFAULT_SETTINGS.display.meteorFps) {
-      settingsStore.setMeteorFps(Math.min(fps, 60));
+      settingsStore.setMeteorFps(targetFps);
     }
     if (settingsStore.display.starsFps === DEFAULT_SETTINGS.display.starsFps) {
-      settingsStore.setStarsFps(Math.min(fps, 60));
+      settingsStore.setStarsFps(targetFps);
     }
 
     // 低性能设备自动关闭高开销特效

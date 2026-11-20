@@ -116,6 +116,13 @@
         >
           {{ $t("settings.background.animation.sceneAwareness") }}
         </Toggle>
+        <Toggle
+          v-if="isLinux()"
+          :checked="backdropBlurEnabled"
+          @change="settingsStore.setBackdropBlurEnabled($event)"
+        >
+          {{ $t("settings.background.animation.backdropBlur") }}
+        </Toggle>
       </div>
     </MenuItem>
 
@@ -137,6 +144,36 @@
           @click="restartApp"
         >
           {{ $t("settings.background.hdr.restartBtn") }}
+        </button>
+      </div>
+    </MenuItem>
+
+    <!-- 窗口透明（仅 Linux：WebKitGTK 全帧透明合成开销高，默认关；开启后桌宠才可透出桌面） -->
+    <MenuItem
+      v-if="isLinux()"
+      :title="$t('settings.background.linuxTransparent.title')"
+      size="large"
+    >
+      <template #header>
+        <Settings :size="20" />
+      </template>
+      <div class="flex flex-col gap-3">
+        <Toggle
+          :checked="linuxTransparentWindow"
+          :disabled="linuxTransparencyBusy"
+          @change="saveLinuxTransparency"
+        >
+          {{ $t("settings.background.linuxTransparent.enable") }}
+        </Toggle>
+        <p class="text-xs text-yellow-400/70">
+          {{ $t("settings.background.linuxTransparent.restartHint") }}
+        </p>
+        <button
+          class="self-start rounded-lg border border-amber-500/30 bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="linuxTransparencyBusy || linuxTransparentWindow === activeLinuxTransparency"
+          @click="restartAppForLinuxTransparent"
+        >
+          {{ $t("settings.background.linuxTransparent.restartBtn") }}
         </button>
       </div>
     </MenuItem>
@@ -333,10 +370,15 @@ import { ref, onMounted, watch, computed, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { MenuPage, MenuItem } from "../../ui";
 import { Button, Toggle, Slider } from "../../base";
+import {
+  getLinuxTransparentWindow,
+  isMainWindowTransparent,
+  setLinuxTransparentWindow,
+} from "@/api/services/config";
 import { useUIStore } from "../../../stores/modules/ui/ui";
 import { useDialogStore } from "../../../stores/modules/ui/dialog";
 import { useSettingsStore } from "../../../stores/modules/settings";
-import { isWindows } from "@/utils/platform";
+import { isWindows, isLinux } from "@/utils/platform";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   Ban,
@@ -427,6 +469,7 @@ const globalMouseTrailEnabled = computed(() => settingsStore.globalMouseTrailEna
 const clickAnimationEnabled = computed(() => settingsStore.clickAnimationEnabled);
 const cursorEffectEngine = computed(() => settingsStore.cursorEffectEngine);
 const sceneAwarenessEnabled = computed(() => settingsStore.sceneAwarenessEnabled);
+const backdropBlurEnabled = computed(() => settingsStore.backdropBlurEnabled);
 const hdrModeEnabled = computed(() => settingsStore.hdrModeEnabled);
 const currentParticle = computed(() => settingsStore.backgroundEffect);
 const currentWeather = computed(() => settingsStore.weatherEffect);
@@ -434,17 +477,66 @@ const currentWeather = computed(() => settingsStore.weatherEffect);
 // 记录进入设置页时的初始值；开关改变后「立即重启」按钮才可用，改回原值则恢复置灰
 const initialHdrMode = ref(settingsStore.hdrModeEnabled);
 const hdrChanged = computed(() => settingsStore.hdrModeEnabled !== initialHdrMode.value);
+const activeLinuxTransparency = ref<boolean | null>(null);
+const linuxTransparentWindow = ref(false);
+const savingLinuxTransparency = ref(false);
+const linuxTransparencyBusy = computed(
+  () => activeLinuxTransparency.value === null || savingLinuxTransparency.value,
+);
 
-// 立即重启应用（HDR 模式等设置需重启后生效）
-async function restartApp() {
-  const ok = await dialogStore.confirm(t("settings.background.hdr.restartConfirm"));
+onMounted(async () => {
+  if (!isLinux()) return;
+  try {
+    const [active, saved] = await Promise.all([
+      isMainWindowTransparent(),
+      getLinuxTransparentWindow(),
+    ]);
+    activeLinuxTransparency.value = active;
+    linuxTransparentWindow.value = saved;
+  } catch (error) {
+    void dialogStore.alert(String(error));
+  }
+});
+
+async function saveLinuxTransparency(enabled: boolean) {
+  if (linuxTransparencyBusy.value) return;
+  const previous = linuxTransparentWindow.value;
+  savingLinuxTransparency.value = true;
+  linuxTransparentWindow.value = enabled;
+  try {
+    await setLinuxTransparentWindow(enabled);
+  } catch (error) {
+    linuxTransparentWindow.value = previous;
+    void dialogStore.alert(String(error));
+  } finally {
+    savingLinuxTransparency.value = false;
+  }
+}
+
+// 确认并立即重启应用（HDR 模式 / Linux 主窗口透明等启动期生效的设置复用）
+async function restartWithConfirm(confirmKey: string, failedKey: string) {
+  const ok = await dialogStore.confirm(t(confirmKey));
   if (!ok) return;
   try {
     await relaunch();
   } catch (e) {
     console.error("重启失败:", e);
-    dialogStore.alert(t("settings.background.hdr.restartFailed"));
+    dialogStore.alert(t(failedKey));
   }
+}
+
+function restartApp() {
+  return restartWithConfirm(
+    "settings.background.hdr.restartConfirm",
+    "settings.background.hdr.restartFailed",
+  );
+}
+
+function restartAppForLinuxTransparent() {
+  return restartWithConfirm(
+    "settings.background.linuxTransparent.restartConfirm",
+    "settings.background.linuxTransparent.restartFailed",
+  );
 }
 const meteorFps = computed({
   get: () => settingsStore.meteorFps,

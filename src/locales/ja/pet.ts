@@ -96,4 +96,6 @@ export default {
     reminderHours: "{count} 時間前に",
     reminderDays: "{count} 日前に",
   },
+  linuxTransparentHint:
+    "現在 Linux メインウィンドウの透過が無効です。「設定 → 背景 → ウィンドウ透過」を有効にして再起動してください。",
 };

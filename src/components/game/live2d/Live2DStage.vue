@@ -15,7 +15,8 @@
 <script setup lang="ts">
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { onBeforeUnmount, onMounted, provide, readonly, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, readonly, ref, watch } from "vue";
+import { isLinux } from "@/utils/platform";
 
 import { useCharacterEditorApi } from "@/composables/useCharacterEditor";
 const { getLive2dFilePath, getLive2dVariantAssets } = useCharacterEditorApi();
@@ -70,8 +71,7 @@ const props = defineProps<{
   /** 投屏全局垂直偏移（像素，正值下移；标准模式下仅投屏窗口传入，主窗口缺省 0）。
       水平偏移由投屏窗口 .cast-role-layer 的 CSS translateX 整层平移，不在此处理。 */
   castOffsetY?: number;
-  /** 渲染帧率上限（0 = 不限制）。桌宠窗口很小，30fps 足够且大幅降低挂机 CPU；
-      仅桌宠舞台（pet/GameRolesStage）传入，标准模式/预览不传保持原行为 */
+  /** 显式指定 0 表示不限帧；未指定时 Linux 默认 60 FPS。 */
   maxFps?: number;
   /** 抚摸交互开关。缺省 false 是刻意的：设置界面的预览挂同一个组件，不传就自动免疫。 */
   touchEnabled?: boolean;
@@ -240,6 +240,8 @@ function destroyApplication() {
   runtime = null;
 }
 
+const fpsCap = computed(() => props.maxFps ?? (isLinux() ? 60 : 0));
+
 async function ensureApplication() {
   if (application || !host.value || disposed) return;
   runtime = await loadLive2dRuntime();
@@ -259,9 +261,7 @@ async function ensureApplication() {
   app.canvas.className = "absolute inset-0 w-full h-full";
   host.value.appendChild(app.canvas);
   app.ticker.speed = 1.35;
-  // 帧率上限：0/undefined 视为不限帧（保持标准模式/预览原行为）
-  const fpsCap = props.maxFps ?? 0;
-  if (fpsCap > 0) app.ticker.maxFPS = fpsCap;
+  app.ticker.maxFPS = fpsCap.value;
   app.ticker.add(updateLipSync);
   app.ticker.add(() => touch.update());
   resizeObserver = new ResizeObserver(() => {
@@ -919,14 +919,9 @@ watch(
 watch(() => [props.castScale, props.castOffsetY] as const, queueSync);
 
 // 帧率上限设置热更新：设置窗口改完即时生效，无需重进桌宠模式
-watch(
-  () => props.maxFps ?? 0,
-  (fps) => {
-    if (!application) return;
-    // 0 = 不限帧（PIXI Ticker 语义：maxFPS=0 即关闭上限）
-    application.ticker.maxFPS = fps > 0 ? fps : 0;
-  },
-);
+watch(fpsCap, (fps) => {
+  if (application) application.ticker.maxFPS = fps;
+});
 
 // 进出触摸模式即时生效，不必重进 /chat。桌宠模式本次不接抚摸，两个条件必须同时成立。
 function isStrokeEnabled() {

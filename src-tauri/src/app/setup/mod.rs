@@ -33,6 +33,9 @@ pub fn setup(
     app: &mut tauri::App<tauri::Wry>,
     log_filter: LogFilterHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Linux 主窗口配置了 create: false，必须在任何 get_webview_window("main") 之前按设置建好
+    crate::app::platform::create_linux_main_window(app)?;
+
     // 设置日志桥接的应用句柄
     utils::log_bridge::set_app_handle(app.handle().clone());
 

@@ -6,6 +6,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch, computed } from "vue";
+import { isLinux } from "@/utils/platform";
 
 interface MeteorTemplate {
   startX: number;
@@ -32,6 +33,13 @@ const props = defineProps<{
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
 let animationFrameId: number | null = null;
+
+const useLayeredGlow = isLinux();
+const GLOW_LAYERS = [
+  { width: 20, opacity: 0.06 },
+  { width: 12, opacity: 0.16 },
+  { width: 6, opacity: 0.2 },
+];
 
 const activeMeteors = ref<ActiveMeteor[]>([]);
 let meteorIdCounter = 0;
@@ -227,24 +235,18 @@ function drawMeteor(meteor: ActiveMeteor, currentTime: number) {
   }
   ctx.stroke();
 
-  // 绘制拖尾光晕
   ctx.save();
-  ctx.filter = "blur(4px)";
-  ctx.beginPath();
   ctx.strokeStyle = `rgba(255, 255, 255, ${getOpacity(progress)})`;
-  ctx.lineWidth = METEOR_CONFIG.HEAD_SIZE * 1;
-  ctx.lineCap = "round";
-
-  for (let i = 0; i <= steps; i++) {
-    const t = tailT + (headT - tailT) * (i / steps);
-    const point = getBezierPoint(t, p0, p1, p2);
-    if (i === 0) {
-      ctx.moveTo(point.x, point.y);
-    } else {
-      ctx.lineTo(point.x, point.y);
+  if (useLayeredGlow) {
+    for (const layer of GLOW_LAYERS) {
+      ctx.lineWidth = layer.width;
+      ctx.globalAlpha = layer.opacity;
+      ctx.stroke();
     }
+  } else {
+    ctx.filter = "blur(4px)";
+    ctx.stroke();
   }
-  ctx.stroke();
   ctx.restore();
 }
 

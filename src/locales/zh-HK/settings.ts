@@ -908,6 +908,7 @@ export default {
         legacy: "經典特效",
       },
       sceneAwareness: "啟用場景感知（切換場景嗰陣觸發旁白）",
+      backdropBlur: "啟用毛玻璃模糊效果（關閉可顯著降低 Linux 合成器 GPU 佔用）",
       meteorFps: "流星幀率 (FPS)",
       starsFps: "星星幀率 (FPS)",
     },
@@ -917,6 +918,14 @@ export default {
       restartHint: "更改後需重啟應用先會生效",
       restartBtn: "即刻重啟應用",
       restartConfirm: "HDR 模式設定喺重啟後先會生效，確定即刻重啟應用？",
+      restartFailed: "重啟失敗，請手動重啟應用",
+    },
+    linuxTransparent: {
+      title: "視窗透明（Linux）",
+      enable: "啟用主視窗透明",
+      restartHint: "預設關閉以提升主介面渲染幀率；需要桌寵透出桌面時開啟，更改後需重啟生效",
+      restartBtn: "即刻重啟應用",
+      restartConfirm: "主視窗透明設定喺重啟後先會生效，確定即刻重啟應用？",
       restartFailed: "重啟失敗，請手動重啟應用",
     },
     perf: {

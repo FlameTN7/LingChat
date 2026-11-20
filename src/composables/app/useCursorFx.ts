@@ -64,7 +64,6 @@ export function useCursorFx(enabled: () => boolean = () => true) {
         trailEnabled: settingsStore.globalMouseTrailEnabled,
         // 特效是盖在页面最上层的独立覆盖层，不参与 DOM 场景合成
         outputCompositing: "browser-overlay",
-        // 加色发光观感；背景偏亮时自然收敛，适合可换壁纸
         hostCompositing: "screen",
         // 弹窗/模态框上不画特效
         inputFilter: (e) =>
