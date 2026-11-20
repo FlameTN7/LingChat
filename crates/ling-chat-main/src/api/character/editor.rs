@@ -1,6 +1,7 @@
 //! 角色编辑会话：资源只写入独立副本，底部保存统一提交，取消销毁副本。
 use crate::ai_service::types::CharacterSettings;
 use crate::ai_service::worldbook::{EntryMatch, MAX_WORLDBOOK_BYTES, ValidationIssue, Worldbook};
+use crate::utils::path::resolve_relative_path;
 use crate::utils::yaml_file::{read_yaml_as_json, resolve_settings_file, write_json_as_yaml};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -244,8 +245,9 @@ pub(in crate::api) fn file_root(
         .filter(|s| s.role_id == role_id)
         .ok_or("角色编辑草稿已失效")?;
     // 后续调用仍会校验文件位于所选根目录内。
-    Ok(Some(if session.draft.path().join(relative).exists() {
-        session.draft.path().to_path_buf()
+    let draft = session.draft.path();
+    Ok(Some(if resolve_relative_path(draft, relative).exists() {
+        draft.to_path_buf()
     } else {
         session.original.clone()
     }))

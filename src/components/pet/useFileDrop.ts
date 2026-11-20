@@ -5,20 +5,27 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIStore } from "@/stores/modules/ui/ui";
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { isLinux } from "@/utils/platform";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+
+const UNSUPPORTED_FILE = "不支持的文件类型";
 
 function isImageFile(path: string): boolean {
   return IMAGE_EXTS.has(path.slice(path.lastIndexOf(".")).toLowerCase());
 }
 
-async function readAsText(path: string): Promise<string | null> {
+async function feedTextFile(path: string): Promise<void> {
+  if (isLinux()) return invoke("feed_text_file", { path });
+
+  let text: string;
   try {
     const bytes = await readFile(path);
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    return null;
+    throw new Error(UNSUPPORTED_FILE);
   }
+  await invoke("feed_text", { text });
 }
 
 export function useFileDrop() {
@@ -56,49 +63,31 @@ export function useFileDrop() {
 
       const path = paths[0];
 
-      // 图片
-      if (isImageFile(path)) {
-        hasFile.value = true;
-        try {
-          await invoke("feed_image", { path });
-          ui.showNotification({
-            type: "success",
-            title: "投喂成功！",
-            duration: 2000,
-            skipTipsCheck: true,
-          });
-        } catch (e) {
-          hasFile.value = false;
-          console.error("投喂失败:", e);
-        }
-        return;
-      }
-
-      // 文本
-      const text = await readAsText(path);
-      if (text === null) {
-        ui.showNotification({
-          type: "error",
-          title: "不支持的文件类型",
-          message: "呜啊！这个文件我看不懂啦~",
-          duration: 2500,
-          skipTipsCheck: true,
-        });
-        return;
-      }
-
+      if (!path) return;
+      const image = isImageFile(path);
       hasFile.value = true;
       try {
-        await invoke("feed_text", { text });
+        if (image) await invoke("feed_image", { path });
+        else await feedTextFile(path);
         ui.showNotification({
           type: "success",
-          title: "文本投喂成功！",
+          title: image ? "投喂成功！" : "文本投喂成功！",
           duration: 2000,
           skipTipsCheck: true,
         });
-      } catch (e) {
+      } catch (error) {
         hasFile.value = false;
-        console.error("投喂失败:", e);
+        if (!image && String(error).includes(UNSUPPORTED_FILE)) {
+          ui.showNotification({
+            type: "error",
+            title: UNSUPPORTED_FILE,
+            message: "呜啊！这个文件我看不懂啦~",
+            duration: 2500,
+            skipTipsCheck: true,
+          });
+        } else {
+          console.error("投喂失败:", error);
+        }
       }
     });
   });

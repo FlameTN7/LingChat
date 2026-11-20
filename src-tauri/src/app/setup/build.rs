@@ -22,6 +22,7 @@ use tauri::{App, Manager};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::Mutex;
 
+use ling_chat_main::ai_service::embedding::{EmbeddingEngine, MODEL_DIR_NAME};
 use ling_chat_main::ai_service::emotion::EmotionClassifier;
 use ling_chat_main::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
 use ling_chat_main::ai_service::god_agent::GodAgentCore;
@@ -158,7 +159,7 @@ pub(super) fn build_service_graph(
             .map(Arc::new),
     ));
 
-    let classifier = load_emotion_classifier(app_config.enable_emotion_classifier, &data_dir);
+    let classifier = load_emotion_classifier(app_config.enable_emotion_classifier);
     let processor = Arc::new(MessageProcessor::new(
         ProcessorOptions {
             time_sense_enabled: app_config.enable_time_sense,
@@ -200,10 +201,10 @@ pub(super) fn build_service_graph(
     )?);
 
     // 文本嵌入引擎（本地 ONNX）。模型缺失 / ONNX 不可用都只是降级为禁用态。
-    let local_embedding = ai_service::embedding::EmbeddingEngine::load(
-        &data_dir
-            .join("third_party")
-            .join(ai_service::embedding::MODEL_DIR_NAME),
+    let embedding_model_dir =
+        ling_chat_main::data_dir::resolve_model_dir(MODEL_DIR_NAME, &EmbeddingEngine::MODEL_FILES);
+    let local_embedding = EmbeddingEngine::load(
+        &embedding_model_dir,
         ling_chat_main::utils::onnx::onnx_available(),
     );
     // 本地 / 云端路由器：用户配置了云端就换后端，云端连续失败则熔断并告警，
@@ -340,45 +341,29 @@ pub(super) fn build_service_graph(
 
 // ═══ 私有 helper（原 init/mod.rs）═══
 
-fn load_emotion_classifier(
-    enabled: bool,
-    data_dir: &std::path::Path,
-) -> Option<Arc<EmotionClassifier>> {
+fn load_emotion_classifier(enabled: bool) -> Option<Arc<EmotionClassifier>> {
     if !enabled {
         tracing::info!("情绪分类器已在配置中禁用");
         return None;
     }
 
-    let model_dir = resolve_emotion_model_dir(data_dir);
-    match model_dir {
-        Some(dir) if dir.join("model.onnx").exists() => match EmotionClassifier::load(&dir) {
-            Ok(clf) => {
-                tracing::info!("情绪分类器加载成功: {}", dir.display());
-                return Some(Arc::new(clf));
-            },
-            Err(e) => {
-                tracing::warn!(
-                    "情绪分类器加载失败 ({}), 回退为禁用状态: {e}",
-                    dir.display()
-                );
-            },
+    let dir = ling_chat_main::data_dir::resolve_model_dir(
+        "emotion_model_19emo",
+        &EmotionClassifier::MODEL_FILES,
+    );
+    match EmotionClassifier::load(&dir) {
+        Ok(classifier) => {
+            tracing::info!("情绪分类器加载成功: {}", dir.display());
+            Some(Arc::new(classifier))
         },
-        _ => {
-            tracing::warn!("未找到情绪模型目录, 情绪分类器将禁用");
+        Err(e) => {
+            tracing::warn!(
+                "情绪分类器加载失败 ({}), 回退为禁用状态: {e}",
+                dir.display()
+            );
+            None
         },
     }
-
-    None
-}
-
-fn resolve_emotion_model_dir(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    // 发布模式：data/emotion_model_19emo/
-    let data_path = data_dir.join("third_party").join("emotion_model_19emo");
-    if data_path.exists() {
-        return Some(data_path);
-    }
-
-    None
 }
 
 /// 加载默认角色设定：上次游玩的角色 → 第一个主角色 → 默认空设定

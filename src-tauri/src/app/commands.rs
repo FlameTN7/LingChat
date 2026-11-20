@@ -137,6 +137,8 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::chat::generate_line_voice,
         api::chat::feed_image,
         api::chat::feed_text,
+        #[cfg(target_os = "linux")]
+        api::chat::feed_text_file,
         api::screenshot::start_screenshot,
         api::screenshot::get_overlay_data,
         api::screenshot::confirm_screenshot,

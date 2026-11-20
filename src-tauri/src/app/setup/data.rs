@@ -15,6 +15,20 @@ pub async fn bootstrap(app: &tauri::App<tauri::Wry>) -> Result<(DatabaseConnecti
     ling_chat_main::data_dir::seed_data_dir(app.handle())?;
     let data_dir = ling_chat_main::data_dir::get_data_dir().clone();
 
+    #[cfg(target_os = "linux")]
+    for relative in [
+        "game_data/characters",
+        "game_data/scripts",
+        "game_data/backgrounds",
+        "game_data/musics",
+        "game_data/ambients",
+        "voice",
+        "fonts",
+        "screenshots",
+    ] {
+        ling_chat_main::data_dir::allow_media_directory(app.handle(), relative.as_ref())?;
+    }
+
     // 应用 LAN 同步暂存文件（必须在 DB 初始化之前，否则 .db 仍被锁定）
     ling_chat_main::lan_sync::staging::apply_staged_files(&data_dir);
 

@@ -1,6 +1,62 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// 在 Linux 上将配置或归档内可能携带的 Windows `\` 分隔符规范化为 `/`。
+pub fn normalize_separators(raw: &str) -> Cow<'_, str> {
+    #[cfg(target_os = "linux")]
+    if raw.contains('\\') {
+        return Cow::Owned(raw.replace('\\', "/"));
+    }
+    Cow::Borrowed(raw)
+}
+
+/// Linux 优先精确匹配，并兼容 Windows 模型文件中的分隔符与大小写。
+pub(crate) fn resolve_relative_path(base: &Path, relative: &str) -> PathBuf {
+    let normalized = normalize_separators(relative);
+    let direct = base.join(normalized.as_ref());
+    #[cfg(target_os = "linux")]
+    if !direct.exists() {
+        if let Some(matched) = resolve_case_insensitive_in(base, normalized.as_ref()) {
+            return matched;
+        }
+    }
+    direct
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_case_insensitive_in(base: &Path, normalized_rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut cur = base.to_path_buf();
+    for comp in Path::new(normalized_rel).components() {
+        match comp {
+            Component::CurDir => {},
+            Component::Normal(seg) => {
+                let exact = cur.join(seg);
+                if exact.exists() {
+                    cur = exact;
+                    continue;
+                }
+                let seg_str = seg.to_str()?;
+                let mut found = None;
+                for entry in fs::read_dir(&cur).ok()?.flatten() {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(seg_str)
+                    {
+                        found = Some(entry.path());
+                        break;
+                    }
+                }
+                cur = found?;
+            },
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(cur)
+}
 
 /// 校验并规范化用户提供的单层目录名。
 ///
@@ -106,7 +162,7 @@ pub fn move_directory_files_to(source_dir: &Path, target_dir: &Path) -> Result<u
 
     for source in &files {
         let destination = target_dir.join(source.file_name().expect("file name checked above"));
-        fs::rename(source, &destination).map_err(|e| {
+        move_file_with_exdev_fallback(source, &destination).map_err(|e| {
             format!(
                 "移动文件失败，源分类已保留且不会删除: {} -> {}: {}",
                 source.display(),
@@ -120,9 +176,62 @@ pub fn move_directory_files_to(source_dir: &Path, target_dir: &Path) -> Result<u
     Ok(files.len())
 }
 
+/// 移动单个文件；在 Linux 跨挂载点（`EXDEV`）时回退到同分区临时复制再原子替换并删源。
+pub fn move_file_with_exdev_fallback(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        #[cfg(target_os = "linux")]
+        Err(e) if e.raw_os_error() == Some(18) => {
+            let parent = dst.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing dst parent")
+            })?;
+            let tmp_name = format!(".lingchat_move_{}.tmp", uuid::Uuid::new_v4().simple());
+            let tmp = parent.join(tmp_name);
+            if let Err(err) = fs::copy(src, &tmp).and_then(|_| fs::rename(&tmp, dst)) {
+                let _ = fs::remove_file(&tmp);
+                return Err(err);
+            }
+            fs::remove_file(src)
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// 异步移动单个文件；在 Linux 跨挂载点（`EXDEV`）时回退到目标目录同分区复制替换再删源。
+pub async fn move_file_with_exdev_fallback_async(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match tokio::fs::rename(src, dst).await {
+        Ok(()) => Ok(()),
+        #[cfg(target_os = "linux")]
+        Err(e) if e.raw_os_error() == Some(18) => {
+            let parent = dst.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing dst parent")
+            })?;
+            let tmp = parent.join(format!(
+                ".lingchat_move_{}.tmp",
+                uuid::Uuid::new_v4().simple()
+            ));
+            if let Err(err) = async {
+                tokio::fs::copy(src, &tmp).await?;
+                tokio::fs::rename(&tmp, dst).await
+            }
+            .await
+            {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(err);
+            }
+            tokio::fs::remove_file(src).await
+        },
+        Err(e) => Err(e),
+    }
+}
+
 /// 将角色资源路径解析为绝对路径。
 pub fn resolve_character_path(data_dir: &Path, resource_path: &str) -> PathBuf {
-    if let Some(rest) = resource_path.strip_prefix("plugin:") {
+    #[cfg(target_os = "linux")]
+    let normalized = normalize_separators(resource_path);
+    #[cfg(not(target_os = "linux"))]
+    let normalized = resource_path;
+    if let Some(rest) = normalized.strip_prefix("plugin:") {
         if let Some((plugin_id, folder)) = rest.split_once('/') {
             if !plugin_id.is_empty() && !folder.is_empty() {
                 return data_dir
@@ -133,7 +242,7 @@ pub fn resolve_character_path(data_dir: &Path, resource_path: &str) -> PathBuf {
             }
         }
     }
-    let path = PathBuf::from(resource_path);
+    let path = PathBuf::from(&*normalized);
     if path.is_absolute() {
         path
     } else {
@@ -170,4 +279,35 @@ pub fn validate_path_in_base(resolved: &Path, base: &Path) -> Result<(), String>
         ));
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_normalize_separators_and_character_path() {
+        let base = Path::new("/tmp/lingchat-data");
+        assert_eq!(normalize_separators("a\\b\\c.png").as_ref(), "a/b/c.png");
+        assert_eq!(
+            resolve_character_path(base, "alice\\portrait.png"),
+            base.join("game_data/characters/alice/portrait.png")
+        );
+    }
+
+    #[test]
+    fn linux_move_file_with_exdev_fallback_moves_within_fs() {
+        let root = std::env::temp_dir().join(format!("lc-exdev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("src.txt");
+        let dst = root.join("nested").join("dst.txt");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"hello").unwrap();
+
+        move_file_with_exdev_fallback(&src, &dst).unwrap();
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"hello");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
