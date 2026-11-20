@@ -1060,6 +1060,9 @@ export default {
       statusComplete: "更新が完了しました。まもなく再起動します...",
       statusError: "更新の確認に失敗しました",
       statusAvailable: "新しいバージョンが利用可能です！",
+      downloadRelease: "v{version} をダウンロード",
+      linuxHint:
+        "Linux 版はアプリ内での上書き更新に対応していません。パッケージマネージャー（AUR / apt 等）または Release ページから更新してください。",
     },
     lanSync: {
       title: "LANデータ同期",

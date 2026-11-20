@@ -106,8 +106,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install eatmydata
-          sudo eatmydata apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpipewire-0.3-dev libgbm-dev libxdo-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libssl-dev mold zip mold xdg-utils
+          sudo apt-get install -y eatmydata
+          sudo eatmydata apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libpipewire-0.3-dev libgbm-dev libxdo-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libssl-dev mold zip xdg-utils
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -118,9 +118,8 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/dev' }}
 
-      # 其它平台：tauri-action 直接构建
+      # 构建 Tauri 应用（Linux 仅打 .deb，共享库由 beforeBundleCommand 收集进 /usr/lib/LingChat/lib）
       - name: 构建 Tauri 应用
-        if: matrix.platform != 'linux-amd64'
         uses: tauri-apps/tauri-action@v1
         continue-on-error: true
         env:
@@ -128,45 +127,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTFLAGS: |
-            ${{ runner.os == 'Linux' && '' || '' }}
+            ${{ runner.os == 'Linux' && '-C link-arg=-fuse-ld=mold' || '' }}
             ${{ runner.os == 'Windows' && '-C linker=rust-lld' || '' }}
             ${{ runner.os == 'macOS' && '' || '' }}
         with:
           # 不用 tauri-action 内置的 uploadWorkflowArtifacts：
           # 它会对每个 bundle 循环 create artifact，若名字不含 [bundle] 会重复 create 同名 → 409，
-          # 导致后续产物（AppImage / .sig 等）丢失。改由下方独立 step 按白名单上传安装包。
+          # 导致后续产物（.sig 等）丢失。改由下方独立 step 按白名单上传安装包。
           args: ${{ matrix.target }}
 
-      # linux-amd64 特例：ort `webgpu` feature 运行时依赖 libwebgpu_dawn.so（Dawn dylib，无法静态链接）。
-      # 该库随 ort download-binaries 下载，cargo build 后由 ort `copy-dylibs` 软链到 target/release。
-      #
-      # 分发侧由 tauri.linux.conf.json 解决：beforeBundleCommand 调
-      # scripts/prepare-linux-libs.mjs 把库解引用复制进 src-tauri/linux-libs/，
-      # 作为 bundle 资源落到 /usr/lib/LingChat/lib（deb）与 AppDir/usr/lib/LingChat/lib（AppImage）；
-      # 可执行文件的 RPATH 由 src-tauri/build.rs 写入 $ORIGIN/../lib/LingChat/lib。
-      #
-      # 这里额外放到系统库路径，只为让 linuxdeploy 打 AppImage 时能解析该依赖，
-      # 否则报 `Could not find dependency: libwebgpu_dawn.so`（裸二进制从资源目录加载，
-      # linuxdeploy 不会自己去那里找）。先 cargo build 让库出现在 target/release，
-      # 再 tauri build（增量）。
-      - name: 构建 Tauri 应用（linux-amd64：放置 libwebgpu_dawn.so）
-        if: matrix.platform == 'linux-amd64'
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          cargo build --release
-          DAWN=$(find target/release -maxdepth 1 -name "libwebgpu_dawn.so" 2>/dev/null | head -1)
-          if [ -z "$DAWN" ]; then
-            echo "!! 未找到 libwebgpu_dawn.so（检查 ort webgpu feature）"
-            exit 1
-          fi
-          sudo cp -L "$DAWN" /usr/lib/x86_64-linux-gnu/libwebgpu_dawn.so
-          sudo ldconfig
-          echo "已放置 /usr/lib/x86_64-linux-gnu/libwebgpu_dawn.so"
-          pnpm tauri build
+      - name: 构建 Linux 便携包 (.tar.gz)
+        if: runner.os == 'Linux'
+        run: node scripts/package-linux-portable.mjs
 
       - name: 上传构建产物（仅安装包与更新签名）
         if: always()
@@ -175,16 +147,15 @@ jobs:
           name: ${{ matrix.platform }}-build
           # 用 `bundle/*` 而不是 `bundle/**`，只用一层通配，把中间产物挡在外面：
           # - `bundle/deb/<Name>_<版本>_<架构>/{data,control}.tar.gz`：deb 打包用的暂存目录
-          # - `bundle/appimage/<Name>.AppDir/`、`bundle/macos/LingChat.app/`：解包目录，含全部依赖库
           # 这些都不是分发文件，通配进来会让 artifact 与 Release 多出几百 MB 无用内容。
           path: |
             target/release/bundle/*/*.deb
             target/release/bundle/*/*.rpm
-            target/release/bundle/*/*.AppImage
             target/release/bundle/*/*.dmg
             target/release/bundle/*/*.msi
             target/release/bundle/*/*.exe
             target/release/bundle/*/*.tar.gz
+            target/release/bundle/*/*.tar.gz.sha256
             target/release/bundle/*/*.sig
           if-no-files-found: warn
 
@@ -225,7 +196,7 @@ jobs:
             请根据你的平台下载对应的安装包。
             - Windows: `.exe`
             - macOS: `.dmg`
-            - Linux: `.AppImage` / `.deb`
+            - Linux: `.tar.gz`（便携包） / `.deb`（Debian/Ubuntu，Arch 请见 `packaging/arch/`）
 
             ## 数据资源
 

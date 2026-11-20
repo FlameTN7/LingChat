@@ -1036,6 +1036,9 @@ export default {
       statusComplete: "更新搞掂，就快重新開過...",
       statusError: "檢查更新失敗",
       statusAvailable: "發現有新版本可以用！",
+      downloadRelease: "去下載 v{version}",
+      linuxHint:
+        "Linux 端唔支援應用程式內覆蓋更新，請透過套件管理器（例如 AUR / apt）或者去 Release 頁面更新。",
     },
     lanSync: {
       title: "局域網數據同步",
