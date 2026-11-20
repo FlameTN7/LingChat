@@ -32,7 +32,7 @@ pub fn seed_full_from_official(data_dir: &Path, official_dir: &Path) -> anyhow::
 
     // 2. 复制 manifest
     if manifest_src.exists() {
-        std::fs::copy(&manifest_src, &manifest_dst)?;
+        copy_user_file(&manifest_src, &manifest_dst)?;
         info!("Seeded manifest to {}", manifest_dst.display());
     }
 
@@ -40,13 +40,23 @@ pub fn seed_full_from_official(data_dir: &Path, official_dir: &Path) -> anyhow::
     Ok(())
 }
 
-/// 从 .official/game_data/ 复制用户选中的文件到 data/game_data/，
-/// 更新本地 manifest，最后删除 .official/。
+/// 从官方资源目录复制用户选中的文件到 data/game_data/，
+/// 更新本地 manifest，并在便携模式时删除本地 data/.official/。
 pub fn apply_selected_files(
     data_dir: &Path,
     selected_files: &[String],
 ) -> anyhow::Result<ResourceSyncResult> {
-    let official_dir = data_dir.join(".official");
+    let (official_dir, is_writable_local) = crate::data_dir::find_official_dir(data_dir)
+        .ok_or_else(|| anyhow::anyhow!("未找到官方资源目录 .official"))?;
+    apply_selected_files_from(data_dir, &official_dir, is_writable_local, selected_files)
+}
+
+fn apply_selected_files_from(
+    data_dir: &Path,
+    official_dir: &Path,
+    is_writable_local: bool,
+    selected_files: &[String],
+) -> anyhow::Result<ResourceSyncResult> {
     let official_manifest_path = official_dir.join("data_manifest.json");
 
     let official_manifest = DataManifest::load(&official_manifest_path)
@@ -92,7 +102,7 @@ pub fn apply_selected_files(
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::copy(&src, &tmp).map_err(|e| anyhow::anyhow!("复制 {} 失败: {}", path, e))?;
+        copy_user_file(&src, &tmp).map_err(|e| anyhow::anyhow!("复制 {path} 失败: {e}"))?;
         std::fs::rename(&tmp, &dst)
             .map_err(|e| anyhow::anyhow!("原子写入 {} 失败: {}", path, e))?;
 
@@ -108,11 +118,13 @@ pub fn apply_selected_files(
     local_manifest.data_version = official_manifest.data_version;
     local_manifest.save(&local_manifest_path)?;
 
-    // 清理 .official/
-    std::fs::remove_dir_all(&official_dir)?;
+    // 仅清理位于可写 data_dir 内的 .official/；系统安装只读资源保留并通过 data_version 判重
+    if is_writable_local {
+        std::fs::remove_dir_all(official_dir)?;
+    }
     info!(
-        "Synced {} files, .official removed, data_version={}",
-        synced, local_manifest.data_version
+        "Synced {} files, official_cleaned={}, data_version={}",
+        synced, is_writable_local, local_manifest.data_version
     );
 
     Ok(ResourceSyncResult {
@@ -120,6 +132,21 @@ pub fn apply_selected_files(
         files_synced: synced,
         message: format!("成功同步 {} 个文件", synced),
     })
+}
+
+fn copy_user_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::copy(src, dst)?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(dst)?.permissions();
+        let mode = permissions.mode();
+        if mode & 0o200 == 0 {
+            permissions.set_mode(mode | 0o200);
+            std::fs::set_permissions(dst, permissions)?;
+        }
+    }
+    Ok(())
 }
 
 // ─── 辅助函数 ────────────────────────────────────────────────
@@ -138,7 +165,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            std::fs::copy(&src_path, &dst_path)?;
+            copy_user_file(&src_path, &dst_path)?;
         }
     }
     Ok(())
@@ -150,4 +177,56 @@ fn is_plain_relative(path: &str) -> bool {
         && Path::new(path)
             .components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::manifest::FileEntry;
+
+    #[test]
+    fn readonly_official_sync_preserves_source_and_updates_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("xdg_data");
+        let official_dir = tmp.path().join("usr_lib_official");
+        std::fs::create_dir_all(data_dir.join("game_data")).unwrap();
+        std::fs::create_dir_all(official_dir.join("game_data/backgrounds")).unwrap();
+
+        let src_file = official_dir.join("game_data/backgrounds/day.webp");
+        std::fs::write(&src_file, b"imgdata").unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "game_data/backgrounds/day.webp".to_string(),
+            FileEntry {
+                sha256: "abc".to_string(),
+                size: 7,
+                modified_at: 0,
+            },
+        );
+        let official_manifest = DataManifest {
+            data_version: 5,
+            files,
+        };
+        official_manifest
+            .save(&official_dir.join("data_manifest.json"))
+            .unwrap();
+
+        let res = apply_selected_files_from(
+            &data_dir,
+            &official_dir,
+            false,
+            &["game_data/backgrounds/day.webp".to_string()],
+        )
+        .unwrap();
+        assert!(res.success);
+        assert_eq!(res.files_synced, 1);
+        assert!(official_dir.exists());
+        assert_eq!(
+            std::fs::read(data_dir.join("game_data/backgrounds/day.webp")).unwrap(),
+            b"imgdata"
+        );
+        let local = DataManifest::load(&data_dir.join("data_manifest.json")).unwrap();
+        assert_eq!(local.data_version, 5);
+    }
 }

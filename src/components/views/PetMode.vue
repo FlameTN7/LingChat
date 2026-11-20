@@ -3,6 +3,8 @@
     id="pet-app"
     :style="appStyleVars"
     class="relative flex h-(--app-height) w-(--app-width) flex-col items-center overflow-hidden bg-transparent transition-none select-none"
+    @pointerenter="!hasGlobalCursor && setShowChatInput(true)"
+    @pointerleave="!hasGlobalCursor && setShowChatInput(false)"
   >
     <DragArea :isDragging="isDragging">
       <div
@@ -81,6 +83,7 @@ const settingsStore = useSettingsStore();
 const uiStore = useUIStore();
 
 const showChatInput = ref(false);
+let hasGlobalCursor = false;
 const { isDragging } = useFileDrop();
 
 // 改成气泡窗上报「第 N 句已完整显示」：未上报的当前句即视为还在打字。
@@ -463,6 +466,7 @@ onMounted(async () => {
       schedulePlacementSync();
     }),
     await appWindow.listen<{ x: number; y: number }>("pet:cursor", (event) => {
+      hasGlobalCursor = true;
       const { x, y } = event.payload;
       setShowChatInput(x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight);
     }),

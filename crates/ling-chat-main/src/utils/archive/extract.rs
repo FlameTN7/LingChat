@@ -79,6 +79,12 @@ pub fn extract_zip(
         };
         let out_path = safe_join(dest_root, &cleaned)?;
 
+        if entry.is_symlink() {
+            summary
+                .warnings
+                .push(format!("已跳过归档中的符号链接: {raw_name}"));
+            continue;
+        }
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path)?;
             continue;
@@ -88,6 +94,13 @@ pub fn extract_zip(
         }
 
         let bytes_written = io::copy(&mut entry, &mut File::create(&out_path)?)?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            // 保留普通读写执行权限，剔除 setuid/setgid/sticky 等特殊位
+            let _ =
+                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode & 0o0777));
+        }
         bytes_done += bytes_written;
         summary.files_extracted += 1;
 
@@ -190,6 +203,14 @@ pub fn extract_sevenz(
             },
         };
 
+        if is_sevenz_symlink(entry) {
+            summary
+                .warnings
+                .push(format!("已跳过 7z 归档中的符号链接: {raw_name}"));
+            processed += 1;
+            return Ok(true);
+        }
+
         if entry.is_directory() {
             std::fs::create_dir_all(&out_path)
                 .map_err(|e| sevenz_rust2::Error::Io(e, "".into()))?;
@@ -251,6 +272,12 @@ pub fn extract_sevenz(
             },
             Err(_) => continue,
         };
+        if is_sevenz_symlink(entry) {
+            summary
+                .warnings
+                .push(format!("已跳过 7z 归档中的符号链接: {raw_name}"));
+            continue;
+        }
         if let Err(e) = check_entry_safety(entry_index, 0, size) {
             // 无数据流条目只可能触发条目数量限制，记录后跳过。
             tracing::warn!("7z empty entry skipped: {}", e);
@@ -288,4 +315,44 @@ fn write_unstreamed_entry(is_directory: bool, out_path: &Path) -> io::Result<()>
     }
     File::create(out_path)?;
     Ok(())
+}
+
+/// 识别 7z 条目中的符号链接（Windows 重解析点或上 16 位 POSIX `S_IFLNK`）。
+fn is_sevenz_symlink(entry: &sevenz_rust2::ArchiveEntry) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    const S_IFMT: u32 = 0o170_000;
+    const S_IFLNK: u32 = 0o120_000;
+    if !entry.has_windows_attributes {
+        return false;
+    }
+    let attrs = entry.windows_attributes;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        return true;
+    }
+    ((attrs >> 16) & S_IFMT) == S_IFLNK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_sevenz_symlink;
+    use sevenz_rust2::ArchiveEntry;
+
+    #[test]
+    fn sevenz_symlink_detection_matches_reparse_and_posix_iflnk() {
+        let mut entry = ArchiveEntry::new();
+        assert!(!is_sevenz_symlink(&entry));
+
+        entry.has_windows_attributes = true;
+        entry.windows_attributes = 0x20; // FILE_ATTRIBUTE_ARCHIVE
+        assert!(!is_sevenz_symlink(&entry));
+
+        entry.windows_attributes = 0x0400; // FILE_ATTRIBUTE_REPARSE_POINT
+        assert!(is_sevenz_symlink(&entry));
+
+        entry.windows_attributes = 0o120_644 << 16; // POSIX S_IFLNK
+        assert!(is_sevenz_symlink(&entry));
+
+        entry.windows_attributes = 0o100_644 << 16; // POSIX regular file
+        assert!(!is_sevenz_symlink(&entry));
+    }
 }

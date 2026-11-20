@@ -58,7 +58,14 @@ pub async fn relocate_dir(src: &Path, dst: &Path) -> Result<(), String> {
         match tokio::fs::rename(src, dst).await {
             Ok(()) => return Ok(()),
             Err(e) => {
+                #[cfg(target_os = "linux")]
+                let is_exdev = e.raw_os_error() == Some(18);
+                #[cfg(not(target_os = "linux"))]
+                let is_exdev = false;
                 last_err = Some(e);
+                if is_exdev {
+                    break;
+                }
                 if attempt < 3 {
                     tokio::time::sleep(std::time::Duration::from_millis(150 * attempt as u64))
                         .await;
@@ -99,13 +106,15 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
             copy_dir_recursive(&from, &to)?;
         } else if ft.is_file() {
             std::fs::copy(&from, &to)?;
-        } else if ft.is_symlink()
-            && let Ok(meta) = std::fs::metadata(&from)
-        {
-            if meta.is_dir() {
-                copy_dir_recursive(&from, &to)?;
-            } else {
-                std::fs::copy(&from, &to)?;
+        } else if ft.is_symlink() {
+            // Linux 上跳过符号链接，防止将归档中的软链接指向内容复制到目标目录
+            #[cfg(not(target_os = "linux"))]
+            if let Ok(meta) = std::fs::metadata(&from) {
+                if meta.is_dir() {
+                    copy_dir_recursive(&from, &to)?;
+                } else {
+                    std::fs::copy(&from, &to)?;
+                }
             }
         }
     }

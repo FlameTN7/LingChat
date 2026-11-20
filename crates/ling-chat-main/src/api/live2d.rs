@@ -15,6 +15,7 @@ use crate::ai_service::types::{
 };
 use crate::db::managers::role_repo::RoleRepo;
 use crate::utils::archive::extract_zip;
+use crate::utils::path::resolve_relative_path;
 use crate::utils::yaml_file::{resolve_settings_file, write_json_as_yaml};
 
 use super::resolve_role_dir;
@@ -134,7 +135,7 @@ fn referenced_path(
         return Err(format!("{label} 引用不是字符串"));
     };
     validate_relative_path(relative, &format!("{label} 引用"))?;
-    let resolved = model_dir.join(relative);
+    let resolved = resolve_relative_path(model_dir, relative);
     if !resolved.is_file() {
         return Err(format!("缺少 {label} 文件: {relative}"));
     }
@@ -759,8 +760,7 @@ pub async fn import_live2d(
                         &variant.model,
                         &format!("variant {variant_name} 的模型路径"),
                     )?;
-                    let source_model = manifest_dir
-                        .join(&variant.model)
+                    let source_model = resolve_relative_path(&manifest_dir, &variant.model)
                         .canonicalize()
                         .map_err(|e| format!("解析导入清单模型路径失败: {e}"))?;
                     source_model
@@ -888,7 +888,7 @@ pub async fn get_live2d_file(
     let root = resolve_role_dir(&role.role_type, role.script_key.as_deref(), folder)?;
     let root = super::character::editor::file_root(role_id, edit_id.as_deref(), &file_path)?
         .unwrap_or(root);
-    let resolved = root.join(file_path);
+    let resolved = resolve_relative_path(&root, &file_path);
     crate::utils::path::validate_path_in_base(&resolved, &root)?;
     if !resolved.is_file() {
         return Err("Live2D 文件不存在".to_string());
@@ -927,7 +927,7 @@ pub async fn inspect_live2d(
         let root =
             super::character::editor::file_root(role_id, edit_id.as_deref(), &variant.model)?
                 .unwrap_or_else(|| root.clone());
-        let model_file = root.join(&variant.model);
+        let model_file = resolve_relative_path(&root, &variant.model);
         let (info, _) = inspect_model(&model_file, &root, &root, variant_name.clone())?;
         models.push(info);
     }
@@ -968,7 +968,7 @@ pub async fn get_live2d_variant_assets(
         .ok_or_else(|| format!("variant {variant_name} 不存在"))?;
     let root = super::character::editor::file_root(role_id, edit_id.as_deref(), &variant.model)?
         .unwrap_or(root);
-    let model_file = root.join(&variant.model);
+    let model_file = resolve_relative_path(&root, &variant.model);
     // variant.model 来自用户可编辑的 settings.yml，必须挡住越界路径
     crate::utils::path::validate_path_in_base(&model_file, &root)?;
     let (refs, model_dir) = read_model_references(&model_file)?;
