@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isLinux } from "@/utils/platform";
 import type { PerfTier } from "./cpu-perf";
 import { getTierLabel, getPerfTierColor, getSuggestedMaxFps } from "./cpu-perf";
 
@@ -114,6 +115,17 @@ export async function getActiveGpu(): Promise<GpuInfo> {
       tier: "Low",
       is_applicable: false,
       message: "无法读取 WebGL 渲染器",
+    };
+  }
+  if (isLinux() && /apple gpu/i.test(renderer)) {
+    console.info(
+      `[GPU] WebKitGTK 2.54+ 隐私伪装了 UNMASKED_RENDERER_WEBGL ("${renderer}")，当前渲染卡识别将回退到 wgpu 硬件枚举结果`,
+    );
+    return {
+      name: "",
+      tier: "Low",
+      is_applicable: false,
+      message: null,
     };
   }
   return await invoke<GpuInfo>("grade_active_gpu", { renderer });

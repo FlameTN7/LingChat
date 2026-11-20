@@ -43,6 +43,8 @@ import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
 import { useGameStore } from "@/stores/modules/game";
 import { useSettingsStore } from "@/stores/modules/settings";
 import { useUIStore } from "@/stores/modules/ui/ui";
+import { isMainWindowTransparent } from "@/api/services/config";
+import { isLinux } from "@/utils/platform";
 import { useAutoAdvance } from "@/composables/chat/useAutoAdvance";
 import { useDialogAdvance } from "@/composables/chat/useDialogAdvance";
 
@@ -482,6 +484,15 @@ onMounted(async () => {
   await syncBubblePlacement();
   await applyBubblePlacement(false);
   emitMirror();
+
+  if (isLinux() && !(await isMainWindowTransparent())) {
+    uiStore.showNotification({
+      type: "info",
+      message: t("pet.linuxTransparentHint"),
+      skipTipsCheck: true,
+      duration: 5000,
+    });
+  }
 
   hitTestInterval = window.setInterval(reportSolidRegions, 100);
 });

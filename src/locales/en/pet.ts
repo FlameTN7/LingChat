@@ -97,4 +97,6 @@ export default {
     reminderHours: "{count} h before",
     reminderDays: "{count} d before",
   },
+  linuxTransparentHint:
+    "Main window transparency is off on Linux. Enable it under Settings → Background → Window Transparency and restart.",
 };

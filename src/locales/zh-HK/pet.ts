@@ -94,4 +94,6 @@ export default {
     reminderHours: "提早 {count} 小時",
     reminderDays: "提早 {count} 日",
   },
+  linuxTransparentHint:
+    "而家 Linux 主視窗未啟用透明，請喺「設定 → 背景 → 視窗透明」開啟並重啟後再切去桌寵。",
 };

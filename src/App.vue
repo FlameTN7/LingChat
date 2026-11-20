@@ -27,10 +27,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isMainWindowTransparent } from "./api/services/config";
 import { useSettingsStore } from "./stores/modules/settings";
 import { useUIStore } from "./stores/modules/ui/ui";
 import CursorEffects from "./components/effects/CursorEffects.vue";
@@ -53,12 +54,48 @@ import { useFullscreenHotkey } from "./composables/app/useFullscreenHotkey";
 import { useGlobalFont } from "./composables/app/useGlobalFont";
 import { useMacTitlebar } from "./composables/app/useMacTitlebar";
 import { useMobileViewport } from "./composables/app/useMobileViewport";
+import { isLinux } from "./utils/platform";
 // ─── 路由 / 窗口标识 ────────────────────────────────────────
 const route = useRoute();
 // 仅主窗口挂载全局弹窗（通知/成就/对话确认），日志窗口等复用 App.vue 的窗口不弹
 const isMainWindow = getCurrentWindow().label === "main";
 
 const settingsStore = useSettingsStore();
+
+// Linux WebKitGTK 性能隔离：
+// 1. 主窗口未开启透明时配合 tauri.linux.conf.json transparent=false 使用不透明深色底，避免全帧 alpha 合成；
+//    开启「Linux 主窗口透明」后后端建透明窗，此处自动让位以使桌宠可透出桌面；
+// 2. 毛玻璃开关关闭时在根元素挂 class 禁用 backdrop-filter。
+const mainWindowTransparent = ref(!isLinux());
+if (isLinux() && isMainWindow) {
+  onMounted(() => {
+    void isMainWindowTransparent()
+      .then((transparent) => {
+        mainWindowTransparent.value = transparent;
+      })
+      .catch(() => {
+        mainWindowTransparent.value = false;
+      });
+  });
+}
+const linuxOpaqueWindow = computed(
+  () => isLinux() && isMainWindow && !mainWindowTransparent.value && route.path !== "/pet",
+);
+const linuxNoBackdropBlur = computed(() => isLinux() && !settingsStore.backdropBlurEnabled);
+watch(
+  linuxOpaqueWindow,
+  (opaque) => {
+    document.documentElement.classList.toggle("linux-opaque-window", opaque);
+  },
+  { immediate: true },
+);
+watch(
+  linuxNoBackdropBlur,
+  (noBlur) => {
+    document.documentElement.classList.toggle("linux-no-backdrop-blur", noBlur);
+  },
+  { immediate: true },
+);
 
 // 托盘还原主窗口后退出轻量模式，角色舞台随之重新挂载（仅主窗口）
 const uiStore = useUIStore();
@@ -147,6 +184,20 @@ html {
   height: 100%;
   overflow: hidden;
   background: transparent;
+}
+
+/* Linux 非桌宠主窗口：不透明深色背景（配合 transparent: false）+ 隔离 #app 堆叠上下文，
+   避免 MainMenu 等负 z-index 背景层掉到 root 背景后面 */
+html.linux-opaque-window {
+  background: #0f172a;
+}
+
+html.linux-opaque-window body {
+  background: transparent;
+}
+
+html.linux-opaque-window #app {
+  isolation: isolate;
 }
 
 #app {

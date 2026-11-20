@@ -64,6 +64,7 @@ export const DEFAULT_SETTINGS = {
     locale: "zh-CN", // 界面显示语言（i18n，'zh-CN' / 'ja'）
     affectionHeartbeatEnabled: true, // 好感度爱心心跳动画开关（关闭后液体爱心静止）
     affectionWaveEnabled: true, // 好感度爱心液体波浪动画开关（关闭后液面为静止平面）
+    backdropBlurEnabled: true, // 毛玻璃模糊开关（Linux 可在设置中手动关闭以降低合成开销）
   },
   // 角色设置
   character: {
@@ -134,6 +135,7 @@ export interface DisplaySettings {
   locale: string;
   affectionHeartbeatEnabled: boolean;
   affectionWaveEnabled: boolean;
+  backdropBlurEnabled: boolean;
 }
 
 export interface CharacterSettings {
@@ -218,6 +220,8 @@ export const useSettingsStore = defineStore("settings", {
     affectionHeartbeatEnabled: (state) => state.display.affectionHeartbeatEnabled ?? true,
     // 好感度爱心液体波浪动画开关（同上回退 true）
     affectionWaveEnabled: (state) => state.display.affectionWaveEnabled ?? true,
+    // 毛玻璃模糊开关（旧持久化数据缺该字段时回退 true）
+    backdropBlurEnabled: (state) => state.display.backdropBlurEnabled ?? true,
     // 各音量
     characterVolume: (state) => state.audio.characterVolume,
     bubbleVolume: (state) => state.audio.bubbleVolume,
@@ -410,6 +414,10 @@ export const useSettingsStore = defineStore("settings", {
     // 设置好感度爱心液体波浪动画开关
     setAffectionWaveEnabled(enabled: boolean) {
       this.display.affectionWaveEnabled = enabled;
+    },
+    // 设置毛玻璃模糊开关
+    setBackdropBlurEnabled(enabled: boolean) {
+      this.display.backdropBlurEnabled = enabled;
     },
     // 设置角色文件夹
     setCharacterFolder(folder: string) {

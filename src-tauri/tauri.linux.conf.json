@@ -1,4 +1,17 @@
 {
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LingChat",
+        "width": 1500,
+        "height": 800,
+        "transparent": false,
+        "shadow": false,
+        "create": false
+      }
+    ]
+  },
   "build": {
     "beforeBundleCommand": "node scripts/prepare-linux-libs.mjs"
   },
