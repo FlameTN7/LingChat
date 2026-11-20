@@ -871,3 +871,41 @@ pub async fn feed_text(app: AppHandle, text: String) -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn feed_text_file(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    use tauri_plugin_fs::FsExt;
+    use tokio::io::AsyncReadExt;
+
+    const MAX_DROP_TEXT_BYTES: u64 = 2 * 1024 * 1024;
+    const INVALID_FILE: &str = "不支持的文件类型";
+    let scope = window.fs_scope();
+    if window.label() != "main" || !scope.is_allowed(&path) {
+        return Err(INVALID_FILE.into());
+    }
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .await
+        .map_err(|_| INVALID_FILE)?;
+    let meta = file.metadata().await.map_err(|_| INVALID_FILE)?;
+    let fd = file.as_raw_fd();
+    if !meta.is_file()
+        || meta.len() > MAX_DROP_TEXT_BYTES
+        || !scope.is_allowed(format!("/proc/self/fd/{fd}"))
+    {
+        return Err(INVALID_FILE.into());
+    }
+    let mut text = String::new();
+    file.take(MAX_DROP_TEXT_BYTES + 1)
+        .read_to_string(&mut text)
+        .await
+        .map_err(|_| INVALID_FILE)?;
+    if text.len() as u64 > MAX_DROP_TEXT_BYTES {
+        return Err(INVALID_FILE.into());
+    }
+    feed_text(window.app_handle().clone(), text).await
+}

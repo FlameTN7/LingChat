@@ -59,6 +59,8 @@ pub struct EmotionClassifier {
 }
 
 impl EmotionClassifier {
+    pub const MODEL_FILES: [&'static str; 3] = ["model.onnx", "vocab.txt", "label_mapping.json"];
+
     /// 禁用状态的空实例（`predict` 全部透传）。
     pub fn disabled() -> Self {
         Self {
@@ -84,9 +86,7 @@ impl EmotionClassifier {
             ));
         }
         let dir: PathBuf = model_dir.as_ref().to_path_buf();
-        let onnx_path = dir.join("model.onnx");
-        let vocab_path = dir.join("vocab.txt");
-        let mapping_path = dir.join("label_mapping.json");
+        let [onnx_path, vocab_path, mapping_path] = Self::MODEL_FILES.map(|file| dir.join(file));
 
         if !onnx_path.exists() {
             return Err(anyhow!("ONNX 模型文件不存在: {}", onnx_path.display()));

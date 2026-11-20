@@ -143,9 +143,37 @@ fn raise_bubble(app: &AppHandle) {
 #[cfg(all(desktop, not(target_os = "windows")))]
 fn raise_bubble(_app: &AppHandle) {}
 
+#[cfg(target_os = "linux")]
+fn is_wayland_window(window: &tauri::WebviewWindow) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    if let Ok(handle) = window.window_handle() {
+        return matches!(handle.as_raw(), RawWindowHandle::Wayland(_));
+    }
+    if std::env::var("GDK_BACKEND")
+        .ok()
+        .is_some_and(|v| v.eq_ignore_ascii_case("x11"))
+    {
+        return false;
+    }
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+        || std::env::var("XDG_SESSION_TYPE")
+            .ok()
+            .is_some_and(|v| v.eq_ignore_ascii_case("wayland"))
+}
+
 /// 同时承担 pet:cursor 鼠标广播：向桌宠前端广播全局鼠标位置驱动 Live2D 视线。
 #[cfg(desktop)]
 pub fn spawn_hit_test_poll(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "linux")]
+    if is_wayland_window(&window) {
+        tracing::info!(
+            "[Pet] 检测到 Wayland 会话：不支持全局光标坐标与点击穿透轮询，桌宠保持可交互状态"
+        );
+        let _ = window.set_ignore_cursor_events(false);
+        return;
+    }
+
     let hit_test_state = window.state::<HitTestState>();
     let rects_arc = hit_test_state.solid_rects.clone();
     let enabled_arc = hit_test_state.enabled.clone();

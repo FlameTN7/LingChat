@@ -21,8 +21,9 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        // 左键留给“还原窗口”，菜单走右键
-        .show_menu_on_left_click(false)
+        // Windows/macOS 左键留给“还原窗口”，菜单走右键；
+        // Linux SNI/AppIndicator 多数桌面左键不会触发独立 Click 事件，改为左键直接弹菜单
+        .show_menu_on_left_click(cfg!(target_os = "linux"))
         .tooltip("LingChat")
         .on_menu_event(|app, event| match event.id.as_ref() {
             MENU_SHOW => restore_main_window(app),

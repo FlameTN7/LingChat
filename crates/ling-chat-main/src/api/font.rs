@@ -118,10 +118,56 @@ pub fn list_system_fonts() -> Result<Vec<FontFamilyInfo>, String> {
         .collect())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
 #[tauri::command]
 pub fn list_system_fonts() -> Result<Vec<FontFamilyInfo>, String> {
-    // 非 Windows 暂未实现系统字体枚举：返回空，前端走“软件默认”即可，不报错。
+    let output = match std::process::Command::new("fc-list")
+        .args([":", "family"])
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => {
+            tracing::debug!(
+                "[Font] fc-list 退出码非零 ({:?})，返回空列表",
+                out.status.code()
+            );
+            return Ok(Vec::new());
+        },
+        Err(e) => {
+            tracing::debug!("[Font] 调用 fc-list 失败（可能未安装 fontconfig）: {e}");
+            return Ok(Vec::new());
+        },
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_fc_list_families(&stdout))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_fc_list_families(stdout: &str) -> Vec<FontFamilyInfo> {
+    let mut seen = std::collections::HashSet::new();
+    let mut families = Vec::new();
+    for line in stdout.lines() {
+        for raw_part in line.split(',') {
+            let trimmed = raw_part.trim().trim_matches('"').trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen.insert(trimmed.to_lowercase()) {
+                families.push(trimmed.to_string());
+            }
+        }
+    }
+    families.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    families
+        .into_iter()
+        .map(|name| FontFamilyInfo { name })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[tauri::command]
+pub fn list_system_fonts() -> Result<Vec<FontFamilyInfo>, String> {
+    // 其他非 Windows 平台暂未实现系统字体枚举：返回空，前端走“软件默认”即可，不报错。
     Ok(Vec::new())
 }
 
@@ -292,4 +338,33 @@ pub fn delete_imported_font(name: String) -> Result<(), String> {
     }
 
     std::fs::remove_file(&file_path).map_err(|e| format!("删除字体文件失败: {}", e))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::parse_fc_list_families;
+
+    #[test]
+    fn linux_parse_fc_list_families_dedup_and_sort() {
+        let sample = "\
+Noto Sans CJK SC,Noto Sans CJK SC Regular
+\"DejaVu Sans\"
+dejavu sans
+Inter, Inter Display
+";
+        let got: Vec<String> = parse_fc_list_families(sample)
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "DejaVu Sans",
+                "Inter",
+                "Inter Display",
+                "Noto Sans CJK SC",
+                "Noto Sans CJK SC Regular",
+            ]
+        );
+    }
 }

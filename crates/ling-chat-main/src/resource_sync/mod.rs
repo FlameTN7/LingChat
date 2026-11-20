@@ -19,7 +19,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 use tracing::info;
 
-use crate::data_dir::get_data_dir;
+use crate::data_dir::{find_official_dir, get_data_dir};
 use crate::manifest::DataManifest;
 
 // ─── 状态 ────────────────────────────────────────────────────
@@ -73,10 +73,20 @@ pub struct ResourceSyncResult {
 #[tauri::command]
 pub async fn check_resource_sync() -> Result<ResourceSyncInfo, String> {
     let data_dir = get_data_dir().clone();
-    let official_manifest_path = data_dir.join(".official").join("data_manifest.json");
+    let Some((official_dir, is_writable_local)) = find_official_dir(&data_dir) else {
+        return Ok(ResourceSyncInfo {
+            available: false,
+            new_version: 0,
+            current_version: 0,
+            files_to_add: vec![],
+            files_to_modify: vec![],
+            total_size: 0,
+        });
+    };
+    let official_manifest_path = official_dir.join("data_manifest.json");
     let local_manifest_path = data_dir.join("data_manifest.json");
 
-    // .official 不存在 → 无更新
+    // .official 清单不存在 → 无更新
     if !official_manifest_path.exists() {
         return Ok(ResourceSyncInfo {
             available: false,
@@ -103,13 +113,15 @@ pub async fn check_resource_sync() -> Result<ResourceSyncInfo, String> {
         }
     };
 
-    // 版本已是最新 → 清理残留 .official
+    // 版本已是最新 → 仅在本地可写目录内清理残留 .official
     if official_manifest.data_version <= local_manifest.data_version {
-        info!(
-            "数据已是最新 (local={}, resource={}), 清理残留 .official",
-            local_manifest.data_version, official_manifest.data_version
-        );
-        let _ = std::fs::remove_dir_all(data_dir.join(".official"));
+        if is_writable_local {
+            info!(
+                "数据已是最新 (local={}, resource={}), 清理残留 .official",
+                local_manifest.data_version, official_manifest.data_version
+            );
+            let _ = std::fs::remove_dir_all(&official_dir);
+        }
         return Ok(ResourceSyncInfo {
             available: false,
             new_version: official_manifest.data_version,

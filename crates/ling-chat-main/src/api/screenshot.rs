@@ -33,6 +33,9 @@ pub async fn start_screenshot(app: AppHandle) -> Result<(), String> {
         // 捕获全分辨率桌面截图并编码为 base64
         let Some(jpeg_bytes) = capture_screen_raw_jpeg() else {
             tracing::error!("[Screenshot] Failed to capture full screen.");
+            #[cfg(target_os = "linux")]
+            return Err("Linux 暂不支持应用内截屏，请使用系统截图工具或直接拖放图片".to_string());
+            #[cfg(not(target_os = "linux"))]
             return Err("屏幕捕获失败（仅支持 Windows）".to_string());
         };
         let base64 = base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &jpeg_bytes);

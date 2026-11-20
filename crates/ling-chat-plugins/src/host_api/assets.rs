@@ -10,16 +10,25 @@ use super::value_to_pyobject;
 /// 再往上就该换流式/分片通道了。
 const MAX_READ_BYTES: u64 = 64 * 1024 * 1024;
 
+fn normalize_rel_separators(raw: &str) -> std::borrow::Cow<'_, str> {
+    #[cfg(target_os = "linux")]
+    if raw.contains('\\') {
+        return std::borrow::Cow::Owned(raw.replace('\\', "/"));
+    }
+    std::borrow::Cow::Borrowed(raw)
+}
+
 /// 校验「相对 `data/` 的路径」字面是否合法：非空、相对、不含 `..` 与盘符。
 ///
 /// manifest 的 `read` 声明与插件传入的请求路径共用这一份校验，别各写一套。
 pub(crate) fn check_relative_data_path(rel: &str) -> Result<(), String> {
     use std::path::Component;
 
+    let rel = normalize_rel_separators(rel);
     if rel.is_empty() {
         return Err("路径为空".to_string());
     }
-    let candidate = std::path::Path::new(rel);
+    let candidate = std::path::Path::new(rel.as_ref());
     if candidate.is_absolute() {
         return Err("只接受相对 data/ 的路径".to_string());
     }
@@ -59,7 +68,8 @@ fn resolve_data_path_in(
     allow: &[String],
     rel: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let rel = rel.trim();
+    let rel_norm = normalize_rel_separators(rel.trim());
+    let rel = rel_norm.as_ref();
     check_relative_data_path(rel)?;
 
     let real = base
@@ -74,7 +84,8 @@ fn resolve_data_path_in(
     }
     // 声明的前缀也要 canonicalize 后再比，免得软链接把声明目录指向 data/ 别处
     let declared = allow.iter().any(|prefix| {
-        base.join(prefix.trim())
+        let prefix_norm = normalize_rel_separators(prefix.trim());
+        base.join(prefix_norm.as_ref())
             .canonicalize()
             .is_ok_and(|p| real.starts_with(&p))
     });
@@ -129,4 +140,24 @@ fn read_data_file_impl_in(
 
 pub(super) fn read_data_file(path: String, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
     Ok(value_to_pyobject(vm, &read_data_file_impl(&path)))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_backslash_paths_normalized_and_traversal_blocked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bg_dir = tmp.path().join("game_data/backgrounds");
+        std::fs::create_dir_all(&bg_dir).unwrap();
+        std::fs::write(bg_dir.join("day.txt"), b"hello").unwrap();
+
+        let allow = vec!["game_data\\backgrounds".to_string()];
+        let ok = resolve_data_path_in(tmp.path(), &allow, "game_data\\backgrounds\\day.txt");
+        assert!(ok.is_ok());
+
+        let traversal = check_relative_data_path("..\\secret.txt");
+        assert!(traversal.is_err());
+    }
 }
