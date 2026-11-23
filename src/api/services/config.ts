@@ -26,6 +26,21 @@ export async function setHdrMode(enabled: boolean): Promise<void> {
   return invoke("set_hdr_mode", { enabled });
 }
 
+export function getLinuxTransparentWindow(): Promise<boolean> {
+  return invoke("get_linux_transparent_window");
+}
+
+export async function setLinuxTransparentWindow(enabled: boolean): Promise<void> {
+  return invoke("set_linux_transparent_window", { enabled });
+}
+
+/**
+ * 查询本次进程主窗口实际是否透明（Linux 启动时写入；其他平台恒返回 true）。
+ */
+export async function isMainWindowTransparent(): Promise<boolean> {
+  return invoke("is_main_window_transparent");
+}
+
 export const getEnvConfigByKey = async (key: string): Promise<ConfigItem> => {
   try {
     const data = await invoke("get_setting_by_key", { key });

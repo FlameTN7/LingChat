@@ -1192,6 +1192,7 @@ export default {
         legacy: "经典特效",
       },
       sceneAwareness: "启用场景感知（切换场景时触发旁白）",
+      backdropBlur: "启用毛玻璃模糊效果（关闭可显著降低 Linux 合成器 GPU 占用）",
       meteorFps: "流星帧率 (FPS)",
       starsFps: "星星帧率 (FPS)",
     },
@@ -1201,6 +1202,14 @@ export default {
       restartHint: "更改后需重启应用生效",
       restartBtn: "立即重启应用",
       restartConfirm: "HDR 模式设置将在重启后生效，确定立即重启应用吗？",
+      restartFailed: "重启失败，请手动重启应用",
+    },
+    linuxTransparent: {
+      title: "窗口透明（Linux）",
+      enable: "启用主窗口透明",
+      restartHint: "默认关闭以提升主界面渲染帧率；需要桌宠透出桌面时开启，更改后需重启生效",
+      restartBtn: "立即重启应用",
+      restartConfirm: "主窗口透明设置将在重启后生效，确定立即重启应用吗？",
       restartFailed: "重启失败，请手动重启应用",
     },
     perf: {

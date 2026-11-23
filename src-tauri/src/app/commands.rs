@@ -34,6 +34,11 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::settings::delete_llm_provider,
         #[cfg(target_os = "windows")]
         api::settings::set_hdr_mode,
+        #[cfg(target_os = "linux")]
+        api::settings::set_linux_transparent_window,
+        #[cfg(target_os = "linux")]
+        crate::app::platform::get_linux_transparent_window,
+        crate::app::platform::is_main_window_transparent,
         api::settings::set_llm_role,
         api::settings::switch_llm,
         api::settings::test_llm_provider,

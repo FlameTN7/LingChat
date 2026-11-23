@@ -19,6 +19,7 @@ pub mod types;
 pub const STORE_FILE: &str = "settings.json";
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::{Store, StoreExt};
@@ -32,4 +33,36 @@ pub use types::{ConfigSetting, ConfigTree};
 pub fn settings_store(app: &AppHandle) -> Result<Arc<Store<Wry>>> {
     app.store(STORE_FILE)
         .context("Failed to open settings store")
+}
+
+/// 从 settings.json 文本解析 Linux 主窗口透明开关；缺键 / 解析失败返回 false。
+pub fn parse_linux_transparent_window(content: &str) -> bool {
+    let Ok(json) = serde_json::from_str::<Value>(content) else {
+        return false;
+    };
+    json.get(keys::LINUX_TRANSPARENT_WINDOW)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_linux_transparent_window_defaults_false() {
+        assert!(!parse_linux_transparent_window(""));
+        assert!(!parse_linux_transparent_window("{}"));
+        assert!(!parse_linux_transparent_window("{not json"));
+        assert!(!parse_linux_transparent_window(
+            r#"{"display.linux_transparent_window":false}"#,
+        ));
+    }
+
+    #[test]
+    fn parse_linux_transparent_window_reads_true() {
+        assert!(parse_linux_transparent_window(
+            r#"{"display.linux_transparent_window":true}"#,
+        ));
+    }
 }
