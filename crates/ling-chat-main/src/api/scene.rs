@@ -892,7 +892,8 @@ pub async fn move_scene_to_category(
         if dest.exists() {
             return Err(format!("目标分类已存在同名背景文件: {file_name}"));
         }
-        std::fs::rename(&src, &dest).map_err(|e| format!("移动背景文件失败: {e}"))?;
+        crate::utils::path::move_file_with_exdev_fallback(&src, &dest)
+            .map_err(|e| format!("移动背景文件失败: {e}"))?;
     }
 
     // 多个场景可能共享同一个背景文件。文件物理移动后，需要同步更新所有

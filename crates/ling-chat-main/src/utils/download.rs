@@ -153,7 +153,7 @@ pub async fn download_to_file(
     tokio::io::AsyncWriteExt::shutdown(&mut file)
         .await
         .map_err(|e| format!("shutdown: {e}"))?;
-    tokio::fs::rename(&tmp, dest)
+    crate::utils::path::move_file_with_exdev_fallback_async(&tmp, dest)
         .await
         .map_err(|e| format!("rename: {e}"))?;
 

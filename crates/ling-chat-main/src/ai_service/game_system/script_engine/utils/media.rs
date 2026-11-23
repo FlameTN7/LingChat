@@ -131,10 +131,12 @@ fn resolve_exact(
         return None;
     }
 
+    let file_path = crate::utils::path::normalize_separators(file_path);
+
     // Step 1: search current script's Assets directory
     if let Some(sp) = script_path {
         for candidate in media_type.subdir_candidates() {
-            let candidate_path = sp.join("Assets").join(candidate).join(file_path);
+            let candidate_path = sp.join("Assets").join(candidate).join(file_path.as_ref());
             if candidate_path.exists()
                 && let Ok(canon) = candidate_path.canonicalize()
             {
@@ -147,7 +149,7 @@ fn resolve_exact(
     let fallback_path = data_dir
         .join("game_data")
         .join(media_type.fallback_dir())
-        .join(file_path);
+        .join(file_path.as_ref());
     if fallback_path.exists()
         && let Ok(canon) = fallback_path.canonicalize()
     {

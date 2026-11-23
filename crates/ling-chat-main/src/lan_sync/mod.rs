@@ -155,7 +155,6 @@ fn get_device_identity(state: &LanSyncState) -> Result<DeviceIdentity, String> {
 
 /// 获取 hostname（用于设备名）。
 fn get_hostname() -> String {
-    // 优先使用环境变量
     #[cfg(target_os = "windows")]
     {
         if let Ok(name) = std::env::var("COMPUTERNAME") {
@@ -164,7 +163,31 @@ fn get_hostname() -> String {
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        let host = gethostname::gethostname()
+            .to_string_lossy()
+            .trim()
+            .to_string();
+        if !host.is_empty() && host != "localhost" {
+            return host;
+        }
+        if let Ok(raw) = std::fs::read_to_string("/etc/hostname") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(name) = std::env::var("HOSTNAME") {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+        if !host.is_empty() {
+            return host;
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         if let Ok(name) = std::env::var("HOSTNAME")
             && !name.is_empty()
@@ -470,4 +493,15 @@ pub fn lan_sync_restart(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn lan_sync_restart() -> Result<(), String> {
     Err("重启功能仅在桌面端可用".to_string())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::get_hostname;
+
+    #[test]
+    fn linux_get_hostname_returns_non_empty() {
+        let host = get_hostname();
+        assert!(!host.trim().is_empty());
+    }
 }

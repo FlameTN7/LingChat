@@ -99,6 +99,17 @@ impl PluginManager {
             return;
         };
         for (id, mut record) in scanned {
+            #[cfg(target_os = "linux")]
+            if let Some(app) = crate::app_handle() {
+                let plugin = std::path::Path::new("plugins").join(&id);
+                for kind in &record.manifest.resources {
+                    let relative = plugin.join(kind.subdir());
+                    if let Err(e) = ling_chat_main::data_dir::allow_media_directory(&app, &relative)
+                    {
+                        tracing::warn!("插件 {id} 媒体目录读取授权失败: {e}");
+                    }
+                }
+            }
             if record.state.enabled && record.error.is_none() {
                 match tools::register_tools(&self.registry, &self.tool_settings, &record) {
                     Ok(()) => {},

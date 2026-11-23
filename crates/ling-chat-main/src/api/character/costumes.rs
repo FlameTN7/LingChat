@@ -211,12 +211,14 @@ pub async fn manage_character_costume(
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     // 移除资源先移入角色目录的回收区，不递归删除用户素材。
     let trash = if action == "remove" && source.as_ref().is_some_and(|p| p.exists()) {
-        let parent = root.parent().ok_or("角色目录不可用")?.join(".editor-trash");
+        let role_parent = root.parent().ok_or("角色目录不可用")?;
+        let canon_role_parent = role_parent.canonicalize().map_err(|e| e.to_string())?;
+        let parent = role_parent.join(".editor-trash");
         std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
         if !parent
             .canonicalize()
             .map_err(|e| e.to_string())?
-            .starts_with(root.parent().ok_or("角色目录不可用")?)
+            .starts_with(&canon_role_parent)
         {
             return Err("回收区路径超出角色目录".into());
         }

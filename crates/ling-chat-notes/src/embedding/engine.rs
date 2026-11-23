@@ -46,6 +46,8 @@ pub struct EmbeddingEngine {
 }
 
 impl EmbeddingEngine {
+    pub const MODEL_FILES: [&'static str; 2] = ["model.onnx", "tokenizer.json"];
+
     /// 从模型目录加载。
     ///
     /// `onnx_ready` 由宿主告知 ONNX Runtime 是否已初始化（Windows 需要先加载
@@ -53,8 +55,7 @@ impl EmbeddingEngine {
     /// 廉价检查与分词器加载（几毫秒），真正的 ONNX 会话推迟到首次
     /// [`Self::embed`]，避免为从不使用语义检索的用户付启动成本。
     pub fn load(model_dir: &Path, onnx_ready: bool) -> Arc<Self> {
-        let onnx_path = model_dir.join("model.onnx");
-        let tokenizer_path = model_dir.join("tokenizer.json");
+        let [onnx_path, tokenizer_path] = Self::MODEL_FILES.map(|file| model_dir.join(file));
 
         let mut engine = Self {
             onnx_path: onnx_path.clone(),
