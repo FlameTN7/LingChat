@@ -127,8 +127,13 @@ jobs:
             fi
           done
           # 同理，Linux x86_64 的 WebGPU EP 依赖 Dawn 动态库，放 exe 同目录由 RPATH 的 $ORIGIN 命中
-          if [ "${{ runner.os }}" = "Linux" ] && [ -e "target/release/libwebgpu_dawn.so" ]; then
-            cp -L "target/release/libwebgpu_dawn.so" "${{ runner.temp }}/dist/"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            node scripts/prepare-linux-libs.mjs
+            if [ -f "src-tauri/linux-libs/libwebgpu_dawn.so" ]; then
+              cp -L "src-tauri/linux-libs/libwebgpu_dawn.so" "${{ runner.temp }}/dist/"
+            fi
+            node scripts/package-linux-portable.mjs
+            cp target/release/bundle/portable/LingChat-*-linux-*.tar.gz* "${{ runner.temp }}/dist/"
           fi
 
       - name: 上传 artifact

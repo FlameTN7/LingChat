@@ -1084,6 +1084,9 @@ export default {
       statusComplete: "Update complete, restarting soon...",
       statusError: "Failed to check for updates",
       statusAvailable: "New version available!",
+      downloadRelease: "Download v{version}",
+      linuxHint:
+        "In-app self-update is disabled on Linux. Please update via your package manager (e.g. AUR / apt) or download from GitHub Releases.",
     },
     lanSync: {
       title: "LAN Data Sync",
